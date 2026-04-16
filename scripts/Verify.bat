@@ -37,8 +37,10 @@ echo [1/7] Validating environment...
 REM Check if running as administrator (optional but recommended for some operations)
 net session >nul 2>&1
 if %errorlevel% == 0 (
+    set "ADMIN_STATUS=Yes"
     echo Administrator privileges detected.
 ) else (
+    set "ADMIN_STATUS=No"
     echo Running without administrator privileges.
     echo Some operations may be limited.
 )

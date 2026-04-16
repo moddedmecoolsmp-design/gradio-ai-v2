@@ -112,9 +112,9 @@ class QwenTTSHandler:
             devnull = os.open(os.devnull, os.O_WRONLY)
             old_stdout_fd = os.dup(1)
             old_stderr_fd = os.dup(2)
-            os.dup2(devnull, 1)
-            os.dup2(devnull, 2)
             try:
+                os.dup2(devnull, 1)
+                os.dup2(devnull, 2)
                 with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
                     result = func()
             finally:

@@ -1,4 +1,5 @@
 import os
+import tempfile
 import torch
 import whisperx
 from pydub import AudioSegment
@@ -23,7 +24,7 @@ class AudioProcessor:
     def extract_audio(self, input_path):
         """Extracts audio from video or ensures audio is in correct format."""
         filename = os.path.basename(input_path).split('.')[0]
-        temp_audio = f"temp_{filename}.wav"
+        temp_audio = os.path.join(tempfile.gettempdir(), f"temp_{filename}_{os.getpid()}.wav")
 
         if input_path.lower().endswith(('.mp4', '.mkv', '.avi')):
             print(f"Extracting audio from {input_path}...")

@@ -71,6 +71,7 @@ class PipelineManager:
         self.flux_anime2real_lora_path = os.path.join(self.loras_dir, "ultra_real_amateur_selfies_klein4b.safetensors")
 
         self._verified_model_repos: set = set()
+        self._original_sdpa = None  # Saved original F.scaled_dot_product_attention before SageAttention patch
 
     def configure_optimization_policy(
         self,
@@ -1062,8 +1063,9 @@ class PipelineManager:
                 # Monkey-patch scaled_dot_product_attention with sageattn.
                 # This is the simplest integration method and works with all
                 # diffusers models that use SDPA internally.
-                _original_sdpa = F.scaled_dot_product_attention
                 if not getattr(F.scaled_dot_product_attention, "_sage_patched", False):
+                    _original_sdpa = F.scaled_dot_product_attention
+                    self._original_sdpa = _original_sdpa
                     def sage_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, *args, **kwargs):
                         # Fall back to original SDPA if shapes are incompatible
                         if attn_mask is not None or dropout_p > 0.0:
@@ -1254,9 +1256,18 @@ class PipelineManager:
         """Unload auxiliary models (ControlNet Union, LoRA adapters, etc.) to free VRAM."""
         self.unload_controlnet_union()
         self.unload_lora()
+        self._restore_original_sdpa()
         self.active_optional_accelerator_status = {}
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    def _restore_original_sdpa(self):
+        """Restore original F.scaled_dot_product_attention if SageAttention was patched."""
+        import torch.nn.functional as F
+        if self._original_sdpa is not None and getattr(F.scaled_dot_product_attention, "_sage_patched", False):
+            F.scaled_dot_product_attention = self._original_sdpa
+            self._original_sdpa = None
+            print("  SageAttention monkey-patch removed (restoring original SDPA).")
 
     def check_model_exists(self, model_repo_id: str) -> bool:
         """Check if model exists in HuggingFace cache."""
