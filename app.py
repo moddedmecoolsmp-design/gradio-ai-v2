@@ -61,7 +61,7 @@ from src.runtime_policies import (
 )
 from src.image.vlm_prompt_upsampler import upsample_prompt_from_image
 from src.utils.device_utils import get_available_devices, get_device_vram_gb
-from src.security import clamp_int, clamp_float
+from src.security import clamp_int, clamp_float, load_json_safe, save_json_safe
 from src.core.async_batch_integration import calculate_dimensions_from_ratio, clear_batch_processor_cache
 from src.utils.common import sanitize_choice
 from src.utils.ui_state import UIState
@@ -105,6 +105,7 @@ from src.state import (
     save_input_images,
     load_input_images,
 )
+from src.config import STATE_DIR
 from src.utils.dimensions import (
     apply_scale_to_dimensions,
     calculate_dimensions_from_target_size,
@@ -140,6 +141,7 @@ log_provider_telemetry(
 
 import atexit
 import contextlib
+import inspect
 import json
 import logging
 import re
