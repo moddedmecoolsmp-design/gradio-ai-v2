@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Output
+*.png
+*.jpg
+*.jpeg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Gradio
+flagged/
+
+# Project caches / temp outputs
+cache/
+output/
+logs/debug/
+temp/
+*.incomplete
+
+# Video and render artifacts
+*_out.png
+*.mp4
+
+# Codex local configuration
+.codex/
+.cursor/
+
+# Claude Flow runtime data
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/
+
+# Local agent/tooling runtime state
+.agents/
+.claude/
+.swarm/
+.windsurf/
+.mcp.json
+.dependencies_verified
+nul
+
+# Environment variables
+.env
+.env.local
+.env.*.local

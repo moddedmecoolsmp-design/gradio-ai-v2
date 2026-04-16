@@ -1,0 +1,33 @@
+REFACTORING PLAN FOR app.py
+============================
+
+GOAL: Prevent image model loading when using only Audio Tools
+
+CURRENT ISSUES:
+1. UI is cluttered with nested tabs
+2. Model loading triggers unclear
+3. Audio tools mixed with image generation
+
+SOLUTION:
+1. Reorganize to TOP-LEVEL tabs:
+   - Tab 1: "Image Generation" (Single + Image-to-Image)
+   - Tab 2: "Batch Processing" (Folder batch)
+   - Tab 3: "Video Processing"
+   - Tab 4: "Audio Tools"
+
+2. Ensure lazy loading:
+   - Models ONLY load when Generate button clicked in their respective tab
+   - No global model initialization
+   - Clear separation of concerns
+
+3. Code organization:
+   - Extract UI building functions
+   - Keep model loading in generate_image/process_batch/process_video
+   - Audio tools already separated
+
+IMPLEMENTATION STEPS:
+1. Backup current app.py ✓
+2. Restructure gr.Blocks with top-level tabs
+3. Extract shared UI components
+4. Test lazy loading behavior
+5. Verify audio tools work independently

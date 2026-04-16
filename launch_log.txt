@@ -1,0 +1,3 @@
+2026-04-11 04:16:21,698 - __main__ - INFO - Computing available devices at startup
+2026-04-11 04:16:21,698 - __main__ - INFO - Device selection result: available=['cuda', 'cpu'], default=cuda
+2026-04-11 04:16:23,043 - httpx - INFO - HTTP Request: GET https://api.gradio.app/pkg-version "HTTP/1.1 200 OK"
