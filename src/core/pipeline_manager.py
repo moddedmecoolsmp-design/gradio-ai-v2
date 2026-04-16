@@ -528,9 +528,9 @@ class PipelineManager:
 
     def _setup_compile_cache(self) -> None:
         """Configure persistent on-disk compile cache for faster warm starts."""
-        cache_dir = os.path.join(self.cache_dir, "torch_compile")
-        os.makedirs(cache_dir, exist_ok=True)
         try:
+            cache_dir = os.path.join(self.cache_dir, "torch_compile")
+            os.makedirs(cache_dir, exist_ok=True)
             inductor_config = getattr(torch, "_inductor", None)
             if inductor_config is not None and hasattr(inductor_config, "config"):
                 inductor_config.config.cache_dir = cache_dir
