@@ -1,4 +1,5 @@
 import gc
+import threading
 from typing import Optional, Tuple, Dict, Any
 
 import torch
@@ -7,6 +8,7 @@ from src.security import sanitize_prompt, MAX_PROMPT_LENGTH
 
 _MODEL_ID = "microsoft/Florence-2-base"
 _CACHE: Dict[str, Dict[str, Any]] = {}
+_CACHE_LOCK = threading.Lock()
 
 
 def _get_device_key(device: str) -> str:
