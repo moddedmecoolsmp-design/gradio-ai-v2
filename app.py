@@ -1,59 +1,67 @@
-"""
-Flux Image Generator - Gradio Web Interface
+"""Flux Image Generator - Gradio Web Interface.
 
-Fast image generation on Apple Silicon and CUDA.
+Fast image generation on CUDA (optimized for RTX 3070 / CUDA 13).
 Supports multiple models:
 - Z-Image Turbo (INT8)
-- FLUX.2-klein-4B (int8 quantized)
+- FLUX.2-klein-4B (Int8 quantized)
+- FLUX.2-klein-4B (4bit SDNQ)
 
 FLUX.2-klein and Z-Image support image-to-image editing.
 """
 
 import os
 import sys
-import subprocess
-import importlib
-import importlib.util
 import threading
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Environment & CUDA configuration (must run before torch import)
+# ---------------------------------------------------------------------------
+import src.config  # noqa: F401 — configures SDNQ env vars, cache paths, CUDA knobs
+import torch
+
+from src.config import (
+    BASE_DIR,
+    CUDA_SPEED_STATUS,
+    DEFAULT_OPTIMIZATION_PROFILE,
+    DEFAULT_OPTIONAL_ACCELERATORS,
+    DEFAULT_WINDOWS_COMPILE_PROBE,
+    DEPENDENCY_CHECK_FLAG,
+    RUNTIME_CUDA13,
+    SKIP_DEPENDENCY_CHECK as SKIP_CHECK,
+    read_bool_env,
+    read_positive_int_env,
+)
 
 from src.runtime_policies import (
     FAST_FLUX_MODEL_CHOICE,
     FAST_RESOLUTION_PRESET,
     LOW_VRAM_FLUX_MODEL_CHOICE,
-    apply_global_cuda_speed_knobs,
-    build_dependency_profile_metadata,
+    choose_image_generation_mode,
     default_enable_windows_compile_probe,
     describe_acceleration_stack,
-    choose_image_generation_mode,
-    canonicalize_cuda_allocator_conf,
-    compute_file_sha256,
     get_torch_compile_probe_status,
-    is_dependency_metadata_current,
-    is_cuda13_runtime,
     is_distilled_model,
     is_flux_model,
+    is_sdnq_or_quantized,
     is_windows_3070_fast_profile,
-    resolve_generation_guidance,
+    is_zimage_model,
     resolve_default_flux_model_choice,
-    resolve_default_resolution_preset,
+    resolve_generation_guidance,
+    resolve_model_choice_for_device,
     resolve_optional_accelerators_enabled,
     resolve_optimization_profile,
-    is_sdnq_or_quantized,
+    resolve_zimage_img2img_steps,
     resolution_preset_to_long_edge,
     should_enable_autocast,
-    is_zimage_model,
-    resolve_model_choice_for_device,
-    resolve_zimage_img2img_steps,
-    select_requirements_file,
+    should_show_edit_controls,
     should_use_attention_slicing,
     should_use_vae_slicing,
     should_use_vae_tiling,
-    should_show_edit_controls,
 )
 from src.image.vlm_prompt_upsampler import upsample_prompt_from_image
 from src.utils.device_utils import get_available_devices, get_device_vram_gb
-from src.security import load_json_safe, save_json_safe, clamp_int, clamp_float
+from src.security import clamp_int, clamp_float
 from src.core.async_batch_integration import calculate_dimensions_from_ratio, clear_batch_processor_cache
 from src.utils.common import sanitize_choice
 from src.utils.ui_state import UIState
@@ -75,127 +83,42 @@ from src.core.video_processor import (
     resolve_video_tool_path,
     safe_remove_path,
 )
-
-# Compatibility anchors retained in app.py for external checks while the real UI
-# lives in src.ui.gradio_app:
-# - FLUX.2-klein-4B (Int8): fastest FLUX default for Windows 11 + RTX 3070
-# - FLUX.2-klein-4B (4bit SDNQ): manual low-VRAM FLUX fallback for RTX 3070
-# - tts_model = gr.State("Qwen TTS")
-# - fn=audio_ui_helpers.update_qwen_tts_ui
-
-# Windows-specific fix for asyncio ConnectionResetError (WinError 10054)
-if sys.platform == "win32":
-    import asyncio
-    try:
-        from asyncio.proactor_events import _ProactorBasePipeTransport
-    except ImportError:
-        pass
-    else:
-        def _silence_connection_lost(original_func):
-            def wrapper(self, exc=None):
-                if isinstance(exc, ConnectionResetError):
-                    exc = None
-                try:
-                    return original_func(self, exc)
-                except ConnectionResetError:
-                    pass
-            return wrapper
-
-        _ProactorBasePipeTransport._call_connection_lost = _silence_connection_lost(_ProactorBasePipeTransport._call_connection_lost)
-
-if sys.platform == "win32":
-    # SDNQ Triton optimizations are now auto-detected via triton-windows.
-    try:
-        import triton  # noqa: F401
-    except ImportError:
-        os.environ.setdefault("SDNQ_USE_TORCH_COMPILE", "0")
-        os.environ.setdefault("SDNQ_USE_TRITON_MM", "0")
-
-# Force SDNQ to use Triton-based INT8 matmul when Triton is available.
-# The default torch._int_mm goes through oneDNN internally, which lacks
-# CUDA dispatch kernels for onednn.qlinear_prepack, causing:
-#   NotImplementedError: could not find kernel for
-#     onednn.qlinear_prepack.default at dispatch key CUDA
-# when torch.compile (inductor) traces through it.
-# Triton-based int_mm avoids oneDNN entirely.
-try:
-    import triton  # noqa: F401
-    os.environ.setdefault("SDNQ_USE_TRITON_MM", "1")
-except ImportError:
-    pass
-
-# On Windows, override SDNQ's torch.compile to use the 'eager' backend
-# instead of the default 'inductor' backend. The inductor backend hangs
-# during Triton kernel compilation on Windows (observed 2000+ second hang
-# with no output). The 'eager' backend traces through dynamo but doesn't
-# invoke the inductor, preventing the hang while keeping use_torch_compile=True
-# so that apply_sdnq_options_to_model(use_quantized_matmul=True) passes its
-# internal Triton availability check.
-if sys.platform == "win32":
-    os.environ.setdefault("SDNQ_COMPILE_KWARGS", '{"backend": "eager"}')
-
-import torch
-os.environ["PYTORCH_MPS_FAST_MATH"] = "1"
-
-# Keep the launcher as the canonical contract surface for persisted-state and
-# migration checks even though src.constants also exports the same value.
-FAST_FLUX_STATE_MIGRATION_KEY = "fast_flux_default_migrated_v1"
-
-
-# Define project base directory
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Dependency verification metadata file.
-DEPENDENCY_CHECK_FLAG = os.path.join(BASE_DIR, ".dependencies_verified")
-SKIP_CHECK = os.environ.get("SKIP_DEPENDENCY_CHECK", "0") == "1"
-
-
-# CUDA Optimizations for RTX 3070 / CUDA 13
-RUNTIME_CUDA13 = is_cuda13_runtime(getattr(torch.version, "cuda", None))
-DEFAULT_OPTIMIZATION_PROFILE = resolve_optimization_profile(
-    requested_profile=os.environ.get("UFIG_OPTIMIZATION_PROFILE"),
-    device="cuda" if torch.cuda.is_available() else "cpu",
-    cuda_runtime=getattr(torch.version, "cuda", None),
+from src.core.cuda_graphs import CUDAGraphRunner, get_cuda_graph_runner
+from src.startup import (
+    enforce_cuda13_runtime_profile,
+    ensure_cache_dirs,
+    log_provider_telemetry,
+    run_dependency_preflight,
 )
-DEFAULT_WINDOWS_COMPILE_PROBE = default_enable_windows_compile_probe(
-    device="cuda" if torch.cuda.is_available() else "cpu",
-    cuda_runtime=getattr(torch.version, "cuda", None),
+from src.state import (
+    STATE_PATH,
+    STATE_IMAGES_DIR,
+    STATE_CHAR_REFS_DIR,
+    MODELS_DIR,
+    LORAS_DIR,
+    ensure_state_dirs,
+    load_user_state,
+    save_user_state,
+    save_images_to_dir,
+    load_images_from_dir,
+    clear_dir,
+    save_input_images,
+    load_input_images,
 )
-DEFAULT_OPTIONAL_ACCELERATORS = resolve_optional_accelerators_enabled(
-    requested_value=None,
-    optimization_profile=DEFAULT_OPTIMIZATION_PROFILE,
+from src.utils.dimensions import (
+    apply_scale_to_dimensions,
+    calculate_dimensions_from_target_size,
+    format_downscale_preview,
+    get_device_gpu_name,
+    get_next_lower_dimensions,
+    normalize_downscale_factor,
+    parse_downscale_factor,
+    resolve_model_dimensions,
+    resolve_resolution_preset_for_model,
 )
-CUDA_SPEED_STATUS = apply_global_cuda_speed_knobs(torch)
-canonicalize_cuda_allocator_conf()
 
-
-# Centralized cache configuration (override via environment variables)
-CACHE_ROOT = os.environ.get("UFIG_CACHE_DIR", os.path.join(BASE_DIR, "cache"))
-HF_HOME = os.environ.get("HF_HOME", os.path.join(CACHE_ROOT, "huggingface"))
-os.environ.setdefault("HF_HOME", HF_HOME)
-os.environ.setdefault("HF_HUB_CACHE", os.path.join(HF_HOME, "hub"))
-os.environ.setdefault("HF_XET_CACHE", os.path.join(HF_HOME, "xet"))
-os.environ.setdefault("HF_ASSETS_CACHE", os.path.join(HF_HOME, "assets"))
-os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
-os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
-os.environ.setdefault("TORCH_HOME", os.path.join(CACHE_ROOT, "torch"))
-os.environ.setdefault("GRADIO_TEMP_DIR", os.path.join(CACHE_ROOT, "gradio"))
-
-
-def read_positive_int_env(name, default):
-    try:
-        value = int(os.environ.get(name, default))
-        return value if value > 0 else default
-    except Exception:
-        return default
-
-
-def read_bool_env(name, default=False):
-    raw_value = os.environ.get(name)
-    if raw_value is None:
-        return default
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+# NOTE: Windows asyncio fix, SDNQ/Triton env, CUDA knobs, and cache paths
+# are now configured by src.config (imported above).
 
 
 GRADIO_CACHE_TTL_SECONDS = read_positive_int_env("UFIG_GRADIO_CACHE_TTL_SECONDS", 24 * 60 * 60)
@@ -206,188 +129,49 @@ GRADIO_CACHE_CLEANUP_FREQUENCY_SECONDS = read_positive_int_env(
 GRADIO_DELETE_CACHE_SECONDS = GRADIO_DELETE_CACHE
 
 
-def _module_available(module_name: str) -> bool:
-    try:
-        return importlib.util.find_spec(module_name) is not None
-    except Exception:
-        return False
+# Create cache/state directories and log provider telemetry at import time
+ensure_cache_dirs()
+log_provider_telemetry(
+    profile=DEFAULT_OPTIMIZATION_PROFILE,
+    cuda_speed_status=CUDA_SPEED_STATUS,
+    compile_probe=DEFAULT_WINDOWS_COMPILE_PROBE,
+    optional_accelerators=DEFAULT_OPTIONAL_ACCELERATORS,
+)
 
-
-def _probe_optional_dependency_statuses():
-    statuses = []
-
-    for import_name, display_name in [
-        ("insightface", "InsightFace"),
-        ("facexlib", "FaceXLib"),
-        ("timm", "PyTorch Image Models"),
-        ("einops", "Einops"),
-        ("ftfy", "FTFY"),
-        ("filterpy", "FilterPy"),
-        ("pydub", "PyDub"),
-        ("librosa", "Librosa"),
-        ("pruna", "Pruna"),
-    ]:
-        if _module_available(import_name):
-            statuses.append(("OK", display_name, "available"))
-        else:
-            statuses.append(("WARN", display_name, "package not installed"))
-
-    if _module_available("qwen_tts"):
-        statuses.append(("OK", "Qwen3 TTS", "available"))
-    else:
-        statuses.append(("WARN", "Qwen3 TTS", "package not installed"))
-
-    mediapipe_available = _module_available("mediapipe")
-    mediapipe_has_solutions = False
-    mediapipe_error = None
-    if mediapipe_available:
-        try:
-            import mediapipe  # type: ignore
-
-            mediapipe_has_solutions = hasattr(mediapipe, "solutions")
-        except Exception as exc:
-            mediapipe_error = str(exc)
-
-    if _module_available("controlnet_aux"):
-        if mediapipe_error:
-            statuses.append(("WARN", "ControlNet Aux", f"degraded: {mediapipe_error}"))
-        elif not mediapipe_available:
-            statuses.append(("WARN", "ControlNet Aux", "degraded: MediaPipe not installed"))
-        elif not mediapipe_has_solutions:
-            statuses.append(("WARN", "ControlNet Aux", "degraded: MediaPipe legacy solutions API unavailable"))
-        else:
-            try:
-                importlib.import_module("controlnet_aux")
-                statuses.append(("OK", "ControlNet Aux", "available"))
-            except Exception as exc:
-                statuses.append(("WARN", "ControlNet Aux", f"unavailable: {exc}"))
-    else:
-        statuses.append(("WARN", "ControlNet Aux", "package not installed"))
-
-    if mediapipe_available and mediapipe_has_solutions:
-        statuses.append(("OK", "MediaPipe", "available"))
-    elif mediapipe_available:
-        statuses.append(("WARN", "MediaPipe", "installed without legacy solutions API"))
-    elif mediapipe_error:
-        statuses.append(("WARN", "MediaPipe", mediapipe_error))
-    else:
-        statuses.append(("WARN", "MediaPipe", "package not installed"))
-
-    torchaudio_module = None
-    torchaudio_error = None
-    if _module_available("torchaudio"):
-        try:
-            import torchaudio  # type: ignore
-
-            torchaudio_module = torchaudio
-        except Exception as exc:
-            torchaudio_error = str(exc)
-
-    if torchaudio_error:
-        statuses.append(("WARN", "PyAnnote Audio", f"unavailable: torchaudio import failed ({torchaudio_error})"))
-        statuses.append(("WARN", "SpeechBrain", f"unavailable: torchaudio import failed ({torchaudio_error})"))
-    else:
-        missing_pyannote = []
-        missing_speechbrain = []
-        if torchaudio_module is None:
-            missing_pyannote.append("torchaudio")
-            missing_speechbrain.append("torchaudio")
-        else:
-            if not hasattr(torchaudio_module, "AudioMetaData"):
-                missing_pyannote.append("AudioMetaData")
-            if not hasattr(torchaudio_module, "list_audio_backends"):
-                missing_speechbrain.append("list_audio_backends")
-
-        if _module_available("pyannote.audio") and not missing_pyannote:
-            statuses.append(("OK", "PyAnnote Audio", "available"))
-        elif _module_available("pyannote.audio"):
-            statuses.append(("WARN", "PyAnnote Audio", f"unavailable: torchaudio missing {', '.join(missing_pyannote)}"))
-        else:
-            statuses.append(("WARN", "PyAnnote Audio", "package not installed"))
-
-        if _module_available("speechbrain") and not missing_speechbrain:
-            statuses.append(("OK", "SpeechBrain", "available"))
-        elif _module_available("speechbrain"):
-            statuses.append(("WARN", "SpeechBrain", f"unavailable: torchaudio missing {', '.join(missing_speechbrain)}"))
-        else:
-            statuses.append(("WARN", "SpeechBrain", "package not installed"))
-
-    return statuses
-
-for path in [
-    CACHE_ROOT,
-    os.environ["HF_HOME"],
-    os.environ["HF_HUB_CACHE"],
-    os.environ["HF_XET_CACHE"],
-    os.environ["HF_ASSETS_CACHE"],
-    os.environ["TORCH_HOME"],
-    os.environ["GRADIO_TEMP_DIR"],
-]:
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception:
-        pass
-
-
-def log_provider_telemetry():
-    """Log startup provider telemetry and fallback context."""
-    runtime_stack = {
-        "profile": DEFAULT_OPTIMIZATION_PROFILE,
-        "cuda_runtime": getattr(torch.version, "cuda", None) or "none",
-        "tf32": CUDA_SPEED_STATUS.get("tf32", False),
-        "matmul_precision": CUDA_SPEED_STATUS.get("matmul_precision") or "default",
-        "sdp": CUDA_SPEED_STATUS.get("sdp", False),
-        "allocator_conf": CUDA_SPEED_STATUS.get("allocator_conf"),
-        "compile_probe": DEFAULT_WINDOWS_COMPILE_PROBE,
-        "optional_accelerators": DEFAULT_OPTIONAL_ACCELERATORS,
-    }
-    try:
-        if torch.cuda.is_available():
-            total_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-            print(f"[Runtime] GPU: {torch.cuda.get_device_name(0)} ({total_gb:.2f} GB)")
-        else:
-            print("[Runtime] GPU: CUDA unavailable")
-    except Exception as e:
-        print(f"[Runtime] GPU telemetry unavailable: {e}")
-
-    try:
-        import onnxruntime as ort
-        providers = ort.get_available_providers()
-        print(f"[Runtime] ONNX providers: {providers}")
-    except Exception as e:
-        print(f"[Runtime] ONNX telemetry unavailable: {e}")
-
-    print(f"[Runtime] Acceleration stack: {describe_acceleration_stack(runtime_stack)}")
-
-
-log_provider_telemetry()
-
-import gradio as gr
-from PIL import Image, Image as PILImage
-import json
 import atexit
-import shutil
-import tempfile
-import inspect
 import contextlib
-import torch._dynamo
+import json
 import logging
 import re
+import shutil
+import tempfile
+import time
 
-# Configure logging
+import gradio as gr
+import torch._dynamo
+from PIL import Image
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+_log_dir = os.path.join(BASE_DIR, "logs")
+os.makedirs(_log_dir, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'app.log')),
-        logging.StreamHandler()
-    ]
+        logging.FileHandler(os.path.join(_log_dir, "app.log")),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Core pipeline / generation imports
+# ---------------------------------------------------------------------------
 from src.core.pipeline_manager import PipelineManager
 from src.core.image_gen import ImageGenerator
 from src.core.batch_gen import BatchGenerator
-
 from src.core.async_batch_integration import build_safe_kwargs, run_async_batch_processing
 from src.image import lora_zimage
 from src.core.video_temporal import (
@@ -408,242 +192,17 @@ except ImportError:
     qwen_handler = None
 from src.audio import audio_ui_helpers
 
-
-
-# Debug logging setup
-import time
+# Temp directory override
 APP_TEMP_DIR = os.environ.get("UFIG_TEMP_DIR", os.environ.get("GRADIO_TEMP_DIR"))
 if APP_TEMP_DIR:
-    tempfile.tempdir = APP_TEMP_DIR  # Silently fail if logging doesn't work
+    tempfile.tempdir = APP_TEMP_DIR
 
-
-STATE_DIR = os.path.join(BASE_DIR, "user_state")
-STATE_PATH = os.path.join(STATE_DIR, "ui_state.json")
-STATE_IMAGES_DIR = os.path.join(STATE_DIR, "input_images")
-STATE_CHAR_REFS_DIR = os.path.join(STATE_DIR, "character_references")
-MODELS_DIR = os.path.join(BASE_DIR, "models")
-
-
-LORAS_DIR = os.path.join(BASE_DIR, "loras")
-KLEIN_ANATOMY_LORA_URL = "https://civitai.com/api/download/models/2324991"
 KLEIN_ANATOMY_LORA_PATH = os.path.join(LORAS_DIR, "kleinSliderAnatomy.safetensors")
 
 
-def ensure_state_dirs():
-    os.makedirs(STATE_DIR, exist_ok=True)
-    os.makedirs(STATE_IMAGES_DIR, exist_ok=True)
-    os.makedirs(STATE_CHAR_REFS_DIR, exist_ok=True)
-    os.makedirs(LORAS_DIR, exist_ok=True)
 
-
-
-
-def check_required_dependencies():
-    """
-    Verify critical imports without mutating the environment.
-    Dependency installation is handled by Install.bat.
-    """
-    print("Checking required dependencies...")
-
-    required_checks = [
-        ("torch", "PyTorch"),
-        ("transformers", "Transformers"),
-        ("diffusers", "Diffusers"),
-        ("accelerate", "Accelerate"),
-        ("safetensors", "SafeTensors"),
-        ("sentencepiece", "SentencePiece"),
-        ("google.protobuf", "Protobuf"),
-        ("PIL", "Pillow"),
-        ("cv2", "OpenCV"),
-        ("gradio", "Gradio"),
-        ("scipy", "SciPy"),
-        ("sklearn", "Scikit-learn"),
-        ("peft", "PEFT"),
-        ("optimum.quanto", "Optimum Quanto"),
-        ("requests", "Requests"),
-    ]
-
-    failed_imports = []
-
-    for import_name, display_name in required_checks:
-        try:
-            if "." in import_name:
-                importlib.import_module(import_name)
-            else:
-                __import__(import_name)
-            print(f"[OK] {display_name} available")
-        except Exception as exc:
-            print(f"[FAIL] {display_name}: {exc}")
-            failed_imports.append((import_name, str(exc)))
-
-    for level, display_name, detail in _probe_optional_dependency_statuses():
-        print(f"[{level}] {display_name} {detail}")
-
-    if not failed_imports:
-        print("All required dependencies are available.")
-        return True
-
-    print(f"\nDependency verification failed for {len(failed_imports)} module(s).")
-    print("Run Install.bat --repair, then relaunch.")
-    return False
-
-def _load_dependency_metadata(flag_path: str):
-    if not os.path.exists(flag_path):
-        return {}
-    try:
-        with open(flag_path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
-    except Exception:
-        try:
-            with open(flag_path, "r", encoding="utf-8") as handle:
-                raw_value = handle.read().strip()
-            if raw_value:
-                return {"_legacy_metadata_text": raw_value}
-        except Exception:
-            pass
-        return {}
-
-
-def _write_dependency_metadata(flag_path: str, metadata: dict):
-    try:
-        with open(flag_path, "w", encoding="utf-8") as handle:
-            json.dump(metadata, handle, indent=2)
-    except Exception as exc:
-        print(f"Warning: failed to persist dependency metadata: {exc}")
-
-
-def run_dependency_preflight():
-    """Verify dependency profile and imports without mutating the environment."""
-    requirements_file = select_requirements_file(
-        base_dir=BASE_DIR,
-        is_windows=(os.name == "nt"),
-        cuda_available=torch.cuda.is_available(),
-    )
-    requirements_path = os.path.join(BASE_DIR, requirements_file)
-    requirements_hash = compute_file_sha256(requirements_path)
-    target_metadata = build_dependency_profile_metadata(requirements_file, requirements_hash)
-    current_metadata = _load_dependency_metadata(DEPENDENCY_CHECK_FLAG)
-    is_current = is_dependency_metadata_current(current_metadata, target_metadata)
-
-    if not os.path.exists(requirements_path):
-        print(f"Dependency preflight failed: missing requirements file {requirements_path}")
-        return False
-
-    if not is_current:
-        if current_metadata.get("_legacy_metadata_text"):
-            print("Dependency metadata is in legacy format and must be regenerated.")
-        print(f"Dependency profile is out of date for {requirements_file}.")
-        print("Run Install.bat --repair, then relaunch.")
-        return False
-
-    print("Dependency profile is current.")
-    if not check_required_dependencies():
-        print("Dependency preflight failed during import verification.")
-        print("Run Install.bat --repair, then relaunch.")
-        return False
-
-    return True
-
-
-def enforce_cuda13_runtime_profile():
-    """Enforce CUDA 13 runtime profile on Windows when CUDA is available."""
-    if os.name != "nt":
-        return True
-    if os.environ.get("UFIG_ENFORCE_CUDA13", "1") != "1":
-        return True
-    if not torch.cuda.is_available():
-        print("CUDA 13 profile check failed: CUDA device not available.")
-        print("This workflow is configured for CUDA 13 + NVIDIA GPU.")
-        print("Re-run Install.bat --repair and verify NVIDIA drivers/runtime.")
-        return False
-
-    cuda_runtime = getattr(torch.version, "cuda", None)
-    if is_cuda13_runtime(cuda_runtime):
-        print(f"CUDA runtime profile validated: {cuda_runtime}")
-        return True
-
-    print(f"CUDA 13 profile check failed: detected torch CUDA runtime '{cuda_runtime}'.")
-    print("This project requires CUDA 13 wheels. Re-run Install.bat --repair.")
-    return False
-
-
-def ensure_accelerate_available():
-    try:
-        import accelerate
-        return accelerate.__version__
-    except Exception as exc:
-        raise RuntimeError(
-            "Accelerate is required to load SDNQ quantized models with low_cpu_mem_usage=True. "
-            "Re-run Launch.bat to reinstall dependencies or install with `pip install accelerate`."
-        ) from exc
-
-
-def save_images_to_dir(images, prefix, directory, max_count=10):
-    """Generic helper to save list of PIL images to a directory."""
-    if not images:
-        return []
-    os.makedirs(directory, exist_ok=True)
-    saved_names = []
-    for idx, img in enumerate(images[:max_count]):
-        if img is None:
-            continue
-        # Handle tuple if from gallery
-        if isinstance(img, tuple):
-            img = img[0]
-        if not isinstance(img, Image.Image):
-            try:
-                img = Image.fromarray(img)
-            except Exception:
-                continue
-
-        path = os.path.join(directory, f"{prefix}_{idx + 1}.png")
-        try:
-            img.save(path)
-            saved_names.append(os.path.basename(path))
-        except Exception:
-            continue
-    return saved_names
-
-def load_images_from_dir(image_names, directory):
-    """Generic helper to load list of PIL images from a directory."""
-    images = []
-    if not image_names:
-        return images
-    for name in image_names:
-        path = os.path.join(directory, str(name))
-        if not os.path.isfile(path):
-            continue
-        try:
-            with Image.open(path) as img:
-                images.append(img.convert("RGB"))
-        except Exception:
-            continue
-    return images
-
-def clear_dir(directory):
-    try:
-        if os.path.isdir(directory):
-            for name in os.listdir(directory):
-                path = os.path.join(directory, name)
-                if os.path.isfile(path):
-                    os.remove(path)
-    except Exception:
-        pass
-
-def save_input_images(images):
-    clear_dir(STATE_IMAGES_DIR)
-    return save_images_to_dir(images, "input", STATE_IMAGES_DIR, max_count=6)
-
-def load_input_images(image_names):
-    return load_images_from_dir(image_names, STATE_IMAGES_DIR)
-
-
-def load_user_state():
-    return load_json_safe(STATE_PATH)
-
-
-def save_user_state(state):
-    save_json_safe(STATE_PATH, state)
+# Dependency checking, state management, and image persistence functions
+# have been extracted to src.startup and src.state respectively.
 
 
 def safe_int_value(value, default: int) -> int:
@@ -678,11 +237,8 @@ def coerce_float(value, default: float) -> float:
         return default
 
 
-def normalize_downscale_factor(value) -> str:
-    factor = parse_downscale_factor(value)
-    if factor <= 1:
-        return "1x"
-    return f"{factor:g}x"
+
+# normalize_downscale_factor -> moved to src.utils.dimensions
 
 
 def build_initial_state(available_devices, default_device):
@@ -1064,14 +620,9 @@ ANIME_PHOTO_PRESETS = {
 }
 
 
-def get_device_gpu_name(device: str) -> Optional[str]:
-    if device != "cuda" or not torch.cuda.is_available():
-        return None
-    try:
-        return torch.cuda.get_device_name(0)
-    except Exception:
-        return None
 
+# Dimension utilities (get_device_gpu_name, resolve_resolution_preset_for_model,
+# resolve_model_dimensions, get_next_lower_dimensions, etc.) -> moved to src.utils.dimensions
 
 def is_windows_fast_flux_device(device: str) -> bool:
     return is_windows_3070_fast_profile(
@@ -1079,60 +630,6 @@ def is_windows_fast_flux_device(device: str) -> bool:
         vram_gb=get_device_vram_gb(device),
         gpu_name=get_device_gpu_name(device),
     )
-
-
-def resolve_resolution_preset_for_model(model_choice: str, mode: str = "single", device: str = "cuda") -> str:
-    return resolve_default_resolution_preset(
-        model_choice=model_choice,
-        mode=mode,
-        device=device,
-        vram_gb=get_device_vram_gb(device),
-        gpu_name=get_device_gpu_name(device),
-    )
-
-
-def calculate_dimensions_from_base(width: int, height: int, preset: str) -> tuple:
-    safe_width = max(256, int(width or 1024))
-    safe_height = max(256, int(height or 1024))
-    return calculate_dimensions_from_ratio(safe_width, safe_height, preset)
-
-
-def resolve_model_dimensions(
-    model_choice: str,
-    width: int,
-    height: int,
-    preset: Optional[str] = None,
-    device: str = "cuda",
-) -> tuple:
-    target_preset = preset or resolve_resolution_preset_for_model(model_choice, mode="single", device=device)
-    return calculate_dimensions_from_base(width, height, target_preset)
-
-
-def get_next_lower_dimensions(width: int, height: int) -> tuple:
-    long_edge = max(int(width), int(height))
-    if long_edge > 1280:
-        target_edge = 1024
-    elif long_edge > 1024:
-        target_edge = 768
-    elif long_edge > 768:
-        target_edge = 640
-    else:
-        target_edge = long_edge
-
-    if target_edge == long_edge:
-        return int(width), int(height)
-
-    aspect_ratio = max(1e-6, float(width) / max(1, int(height)))
-    if aspect_ratio >= 1:
-        new_width = target_edge
-        new_height = int(target_edge / aspect_ratio)
-    else:
-        new_height = target_edge
-        new_width = int(target_edge * aspect_ratio)
-
-    new_width = max(256, (new_width // 64) * 64)
-    new_height = max(256, (new_height // 64) * 64)
-    return new_width, new_height
 
 
 def apply_prompt_preset(preset_name, current_prompt, current_negative, current_strength, current_steps, current_lora_file, current_lora_strength, current_guidance):
@@ -1319,113 +816,8 @@ def compile_pipeline_components(pipe, device, cache_key=None):
         return False
 
 
-class CUDAGraphRunner:
-    """CUDA Graph runner for accelerating repeated diffusion inference.
-    
-    Captures the UNet/transformer execution into a CUDA graph for replay,
-    eliminating CPU kernel launch overhead. Best for fixed input shapes.
-    """
-    
-    def __init__(self):
-        self.graphs = {}  # (height, width, steps) -> (graph, static_inputs)
-        self.warmup_done = False
-        
-    def _make_static_inputs(self, pipe, batch_size, height, width, device, dtype):
-        """Create static input tensors for graph capture."""
-        # Create dummy latents
-        vae_scale_factor = getattr(pipe, "vae_scale_factor", 8)
-        latent_height = height // vae_scale_factor
-        latent_width = width // vae_scale_factor
-        
-        if hasattr(pipe, 'transformer'):
-            # FLUX/SD3 style with transformer
-            in_channels = getattr(pipe.transformer, 'in_channels', 16)
-            latents = torch.randn(
-                (batch_size, in_channels, latent_height, latent_width),
-                device=device, dtype=dtype
-            )
-        else:
-            # SD style with unet
-            latents = torch.randn(
-                (batch_size, 4, latent_height, latent_width),
-                device=device, dtype=dtype
-            )
-        
-        return latents
-        
-    def capture_graph(self, pipe, batch_size, height, width, steps, device='cuda'):
-        """Capture a CUDA graph for given dimensions."""
-        if device != 'cuda' or not torch.cuda.is_available():
-            return False
-            
-        key = (batch_size, height, width, steps)
-        if key in self.graphs:
-            return True  # Already captured
-            
-        # Check CUDA capability
-        capability = torch.cuda.get_device_capability()
-        if capability[0] < 7:  # Volta+
-            return False
-            
-        print(f"  [CUDA Graph] Capturing graph for {height}x{width} @ {steps} steps...")
-        
-        try:
-            # Warmup
-            s = torch.cuda.Stream()
-            s.wait_stream(torch.cuda.current_stream())
-            
-            with torch.cuda.stream(s):
-                for _ in range(3):  # Warmup runs
-                    static_inputs = self._make_static_inputs(pipe, batch_size, height, width, device, torch.float16)
-                    if hasattr(pipe, 'transformer'):
-                        _ = pipe.transformer(static_inputs, timestep=1.0, encoder_hidden_states=torch.randn(1, 77, 4096, device=device, dtype=torch.float16))
-                    elif hasattr(pipe, 'unet'):
-                        _ = pipe.unet(static_inputs, 1.0, encoder_hidden_states=torch.randn(1, 77, 2048, device=device, dtype=torch.float16))
-                        
-            torch.cuda.current_stream().wait_stream(s)
-            
-            # Capture
-            g = torch.cuda.CUDAGraph()
-            static_inputs = self._make_static_inputs(pipe, batch_size, height, width, device, torch.float16)
-            
-            with torch.cuda.graph(g):
-                if hasattr(pipe, 'transformer'):
-                    static_output = pipe.transformer(static_inputs, timestep=1.0, encoder_hidden_states=torch.randn(1, 77, 4096, device=device, dtype=torch.float16))
-                elif hasattr(pipe, 'unet'):
-                    static_output = pipe.unet(static_inputs, 1.0, encoder_hidden_states=torch.randn(1, 77, 2048, device=device, dtype=torch.float16))
-                    
-            self.graphs[key] = (g, static_inputs, static_output)
-            print(f"  [CUDA Graph] Captured successfully for {height}x{width}")
-            return True
-            
-        except Exception as e:
-            print(f"  [CUDA Graph] Capture failed: {e}")
-            return False
-            
-    def replay(self, batch_size, height, width, steps):
-        """Replay a captured graph. Returns True if replayed, False if not available."""
-        key = (batch_size, height, width, steps)
-        if key not in self.graphs:
-            return False, None
-            
-        g, static_inputs, static_output = self.graphs[key]
-        g.replay()
-        return True, static_output
-        
-    def is_captured(self, batch_size, height, width, steps):
-        """Check if graph is captured for given dimensions."""
-        return (batch_size, height, width, steps) in self.graphs
 
-
-# Global CUDA graph runner (lazy init)
-_cuda_graph_runner = None
-
-def get_cuda_graph_runner():
-    """Get or create the global CUDA graph runner."""
-    global _cuda_graph_runner
-    if _cuda_graph_runner is None:
-        _cuda_graph_runner = CUDAGraphRunner()
-    return _cuda_graph_runner
+# CUDAGraphRunner and get_cuda_graph_runner -> moved to src.core.cuda_graphs
 
 
 def print_memory(label):
@@ -3873,75 +3265,10 @@ def clear_lora():
     return None, "LoRA cleared"
 
 
-def calculate_dimensions_from_target_size(width: int, height: int, target_size: int) -> tuple:
-    """Calculate output dimensions maintaining aspect ratio for a target longest side."""
-    aspect_ratio = width / height
 
-    if aspect_ratio >= 1:
-        new_width = target_size
-        new_height = int(target_size / aspect_ratio)
-    else:
-        new_height = target_size
-        new_width = int(target_size * aspect_ratio)
+# calculate_dimensions_from_target_size, parse_downscale_factor,
+# apply_scale_to_dimensions, format_downscale_preview -> moved to src.utils.dimensions
 
-    new_width = (new_width // 64) * 64
-    new_height = (new_height // 64) * 64
-
-    new_width = max(256, min(2048, new_width))
-    new_height = max(256, min(2048, new_height))
-
-    return new_width, new_height
-
-
-def parse_downscale_factor(value) -> float:
-    if value is None:
-        return 1.0
-    if isinstance(value, (int, float)):
-        factor = float(value)
-    else:
-        text = str(value).strip().lower()
-        if not text:
-            return 1.0
-        if text.endswith("x"):
-            text = text[:-1].strip()
-        match = re.search(r"\d+(?:\.\d+)?", text)
-        if match:
-            text = match.group(0)
-        try:
-            factor = float(text)
-        except ValueError:
-            return 1.0
-    return factor if factor > 0 else 1.0
-
-
-def apply_scale_to_dimensions(width: int, height: int, downscale_factor) -> tuple:
-    factor = parse_downscale_factor(downscale_factor)
-
-    # FLUX and Z-Image VAEs require dimensions divisible by
-    # vae_scale_factor*2 = 16. Always align to avoid pipeline crashes.
-    if factor <= 1:
-        new_width = (width // 16) * 16 or 16
-        new_height = (height // 16) * 16 or 16
-        return max(256, new_width), max(256, new_height)
-
-    new_width = max(256, int(width / factor))
-    new_height = max(256, int(height / factor))
-
-    new_width = (new_width // 16) * 16
-    new_height = (new_height // 16) * 16
-
-    new_width = max(256, min(2048, new_width))
-    new_height = max(256, min(2048, new_height))
-
-    return new_width, new_height
-
-
-def format_downscale_preview(width: int, height: int, downscale_factor) -> str:
-    factor = parse_downscale_factor(downscale_factor)
-    scaled_w, scaled_h = apply_scale_to_dimensions(width, height, factor)
-    if factor <= 1:
-        return f"{width}x{height} (no downscale)"
-    return f"{width}x{height} → {scaled_w}x{scaled_h} ({factor:g}x downscale)"
 def on_image_upload(images, current_preset, downscale_factor):
     if images is None or len(images) == 0:
         return (
