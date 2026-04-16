@@ -3,17 +3,17 @@ Pose and Facial Expression Extraction Helper
 Uses DWPose/OpenPose for preserving character poses and facial expressions
 """
 
-import os
+import logging
+
 import torch
 import numpy as np
 from PIL import Image
 from typing import Optional, Literal
 
+logger = logging.getLogger(__name__)
+
 # Global cache for pose preprocessors
 _pose_preprocessor_cache = {}
-DEBUG_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "debug")
-os.makedirs(DEBUG_LOG_DIR, exist_ok=True)
-DEBUG_LOG_PATH = os.path.join(DEBUG_LOG_DIR, "ultra_fast_image_gen_debug.log")
 
 
 class PoseExtractor:
@@ -83,45 +83,14 @@ class PoseExtractor:
         Returns:
             PIL Image with pose skeleton visualization, or None if detection fails
         """
-        # #region agent log
-        try:
-            import time
-            log_entry = {
-                "timestamp": int(time.time() * 1000),
-                "location": "pose_helper.py:63",
-                "message": "Pose extraction attempt",
-                "data": {"mode": mode, "detector_type": self.detector_type, "image_size": f"{image.size if image else 'None'}"},
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "B"
-            }
-            with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-                import json
-                f.write(json.dumps(log_entry) + "\n")
-        except Exception:
-            pass
-        # #endregion
+        logger.debug("Pose extraction: mode=%s detector=%s size=%s",
+                     mode, self.detector_type, image.size if image else None)
 
         if self.preprocessor is None:
             self.load_preprocessor()
 
         if self.preprocessor is None:
-            # #region agent log
-            try:
-                log_entry = {
-                    "timestamp": int(time.time() * 1000),
-                    "location": "pose_helper.py:84",
-                    "message": "Pose extraction failed - no preprocessor",
-                    "data": {"detector_type": self.detector_type},
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "B"
-                }
-                with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(log_entry) + "\n")
-            except Exception:
-                pass
-            # #endregion
+            logger.warning("Pose extraction skipped: no preprocessor (%s)", self.detector_type)
             return None
 
         try:
@@ -150,47 +119,13 @@ class PoseExtractor:
                     hand_and_face=include_face and include_hands
                 )
 
-            print(f"  Pose extracted: {mode} mode")
-
-            # #region agent log
-            try:
-                log_entry = {
-                    "timestamp": int(time.time() * 1000),
-                    "location": "pose_helper.py:114",
-                    "message": "Pose extraction success",
-                    "data": {"mode": mode, "pose_image_size": f"{pose_image.size if pose_image else 'None'}"},
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "B"
-                }
-                with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(log_entry) + "\n")
-            except Exception:
-                pass
-            # #endregion
-
+            logger.debug("Pose extracted: mode=%s size=%s",
+                         mode, pose_image.size if pose_image else None)
             return pose_image
 
         except Exception as e:
-            print(f"  Warning: Pose extraction failed: {e}")
-
-            # #region agent log
-            try:
-                log_entry = {
-                    "timestamp": int(time.time() * 1000),
-                    "location": "pose_helper.py:118",
-                    "message": "Pose extraction failed with error",
-                    "data": {"mode": mode, "detector_type": self.detector_type, "error": str(e)},
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "B"
-                }
-                with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(log_entry) + "\n")
-            except Exception:
-                pass
-            # #endregion
-
+            logger.warning("Pose extraction failed: %s (mode=%s, detector=%s)",
+                           e, mode, self.detector_type)
             return None
     
     def unload(self):
