@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from src.video_temporal import (
+from src.core.video_temporal import (
     build_video_temporal_config,
     build_occlusion_mask,
     prepare_temporal_condition_frame,

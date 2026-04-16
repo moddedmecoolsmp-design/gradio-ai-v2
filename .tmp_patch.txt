@@ -1,4 +1,0 @@
-*** Begin Patch
-*** Add File: src/.tmp_patch_test2
-+test
-*** End Patch

@@ -231,7 +231,7 @@ set "TORCHINDUCTOR_MAX_AUTOTUNE=1"
 set "TORCHINDUCTOR_FREEZING=1"
 set "TORCHINDUCTOR_CACHE_DIR=%CD%\cache\torch_inductor"
 set "CUDA_DEVICE_ORDER=PCI_BUS_ID"
-set "PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512"
+set "PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256,roundup_power2_divisions:32"
 set "PYTORCH_ALLOC_CONF=%PYTORCH_CUDA_ALLOC_CONF%"
 if "%UFIG_OPTIMIZATION_PROFILE%"=="" set "UFIG_OPTIMIZATION_PROFILE=max_speed"
 if "%UFIG_ENABLE_OPTIONAL_ACCELERATORS%"=="" set "UFIG_ENABLE_OPTIONAL_ACCELERATORS=0"
@@ -273,7 +273,9 @@ echo Optional Components:
 where git-lfs >nul 2>&1 && echo - git-lfs: Available || echo - git-lfs: Not available
 python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('qwen_tts') else 1)" >nul 2>&1 && echo - qwen-tts: Available || echo - qwen-tts: Not available
 if exist "checkpoints" (
+    echo - checkpoints/: Found
 ) else (
+    echo - checkpoints/: Missing
 )
 echo.
 echo Directories Created:
