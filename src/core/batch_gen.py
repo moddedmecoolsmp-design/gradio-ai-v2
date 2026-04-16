@@ -192,6 +192,7 @@ class BatchGenerator:
                 enable_prompt_upsampling=enable_prompt_upsampling,
                 character_embeddings=character_embeddings,
                 enable_multi_character=enable_multi_character,
+                model_choice=current_model,
                 optimization_profile=getattr(self.pm, "optimization_profile", "balanced"),
                 autocast_ctx=(
                     torch.amp.autocast("cuda", dtype=torch.bfloat16)
@@ -306,7 +307,8 @@ class BatchGenerator:
                 enable_pose_preservation=enable_pose_preservation, enable_faceswap=enable_faceswap,
                 enable_gender_preservation=enable_gender_preservation,
                 enable_prompt_upsampling=enable_prompt_upsampling,
-                enable_multi_character=enable_multi_character
+                enable_multi_character=enable_multi_character,
+                model_choice=self.pm.current_model,
             )
 
             # 4. Final Assemble
