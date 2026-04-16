@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Generated images and media
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*_out.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Gradio
+flagged/
+
+# Project runtime directories
+cache/
+output/
+logs/
+temp/
+models/
+loras/
+user_state/
+*.incomplete
+
+# Dependency verification stamp
+.dependencies_verified
+
+# Codex / AI agent local configuration
+.codex/
+.cursor/
+.claude-flow/
+.agents/
+.claude/
+.swarm/
+.windsurf/
+.mcp.json
+nul
+
+# Environment variables
+.env
+.env.local
+.env.*.local
