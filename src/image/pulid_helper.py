@@ -426,9 +426,13 @@ class PuLIDFluxPatch:
             # Inject face embeddings into encoder_hidden_states (context)
             # encoder_hidden_states shape: [B, L, C]
 
+            # Expand face embeddings to match batch dimension
+            all_emb = all_embeddings.to(encoder_hidden_states.device, dtype=encoder_hidden_states.dtype)
+            if all_emb.shape[0] != encoder_hidden_states.shape[0]:
+                all_emb = all_emb.expand(encoder_hidden_states.shape[0], -1, -1)
+
             # Concatenate face embeddings to context
-            # This is a simplified version of PuLID injection
-            new_encoder_hidden_states = torch.cat([encoder_hidden_states, all_embeddings.to(encoder_hidden_states.device, dtype=encoder_hidden_states.dtype)], dim=1)
+            new_encoder_hidden_states = torch.cat([encoder_hidden_states, all_emb], dim=1)
 
             # Call original forward
             return block_self._original_forward(hidden_states, new_encoder_hidden_states, *args, **kwargs)
