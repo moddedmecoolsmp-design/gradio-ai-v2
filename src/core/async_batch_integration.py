@@ -177,6 +177,7 @@ def create_batch_processor_func(
     negative_prompt = fixed_kwargs.get("negative_prompt", "")
     steps = fixed_kwargs.get("steps", 4)
     guidance = fixed_kwargs.get("guidance", 3.5)
+    model_choice = fixed_kwargs.get("model_choice")
     seed = fixed_kwargs.get("seed", -1)
     input_folder = fixed_kwargs.get("input_folder", "")
     preset = fixed_kwargs.get("preset", "~1024px")
@@ -215,7 +216,7 @@ def create_batch_processor_func(
 
         # Determine if we should override guidance scale for distilled models
         # (SDNQ, INT8, etc. work best with 0.0 to avoid warnings)
-        final_guidance = resolve_generation_guidance(str(type(pipe)), guidance)
+        final_guidance = resolve_generation_guidance(model_choice, guidance)
 
         # 1. Preprocess all images (Resize & Dimensions)
         resized_images = []
@@ -622,10 +623,10 @@ async def process_batch_folder_async(
     indexed_paths = {p: i for i, p in enumerate(image_paths)}
 
     # Wrapper to inject index for batch
-    def process_with_index(paths, images, pipe, device, output_folder, **kwargs):
+    async def process_with_index(paths, images, pipe, device, output_folder, **kwargs):
         batch_indices = [indexed_paths.get(p, 0) for p in paths]
 
-        return process_fn(
+        return await process_fn(
             paths=paths,
             images=images,
             pipe=pipe,

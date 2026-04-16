@@ -113,7 +113,7 @@ for /f "tokens=2" %%i in ('python --version 2^>^&1') do set PYTHON_VERSION=%%i
 echo Python version: %PYTHON_VERSION%
 
 REM Validate Python version (require 3.10+)
-echo %PYTHON_VERSION% | findstr /r "^3\.[1-9][0-9]*\." >nul
+echo %PYTHON_VERSION% | findstr /r "^3\.1[0-9]\." >nul
 if errorlevel 1 (
     echo ERROR: Python 3.10 or higher is required. Current: %PYTHON_VERSION%
     goto :error_exit

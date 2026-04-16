@@ -478,7 +478,7 @@ class AsyncBatchPipeline:
 
                     if stream:
                         with torch.cuda.stream(stream), autocast_factory():
-                            results = process_fn(
+                            results = await process_fn(
                                 paths=batch_paths,
                                 images=batch_images,
                                 pipe=pipe,
@@ -488,7 +488,7 @@ class AsyncBatchPipeline:
                             )
                     else:
                         with autocast_factory():
-                            results = process_fn(
+                            results = await process_fn(
                                 paths=batch_paths,
                                 images=batch_images,
                                 pipe=pipe,
@@ -556,7 +556,7 @@ class AsyncBatchPipeline:
                             chunk_images = [i for _, i in chunk]
                             try:
                                 with autocast_factory():
-                                    _ = process_fn(
+                                    _ = await process_fn(
                                         paths=chunk_paths,
                                         images=chunk_images,
                                         pipe=pipe,
@@ -594,7 +594,7 @@ class AsyncBatchPipeline:
                                 chunk_images = [i for _, i in chunk]
                                 try:
                                     with autocast_factory():
-                                        _ = process_fn(
+                                        _ = await process_fn(
                                             paths=chunk_paths,
                                             images=chunk_images,
                                             pipe=pipe,

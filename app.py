@@ -2057,6 +2057,7 @@ def _legacy_batch_process_folder_impl(
                 progress_callback=progress_wrapper,
 
                 # Process kwargs
+                model_choice=pipeline_manager.current_model,
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 steps=steps,
