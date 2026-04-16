@@ -390,7 +390,7 @@ from src.core.batch_gen import BatchGenerator
 
 from src.core.async_batch_integration import build_safe_kwargs, run_async_batch_processing
 from src.image import lora_zimage
-from src.video_temporal import (
+from src.core.video_temporal import (
     build_video_temporal_config,
     build_ffmpeg_audio_trim_command,
     build_ffmpeg_deflicker_command,

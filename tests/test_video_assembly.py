@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-from src.video_temporal import (
+from src.core.video_temporal import (
     build_deflicker_filter,
     build_ffmpeg_audio_trim_command,
     build_ffmpeg_deflicker_command,
