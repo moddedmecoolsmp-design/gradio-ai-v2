@@ -39,24 +39,11 @@ class BatchGenerator:
         model_choice,
         lora_file,
         lora_strength,
-        enable_multi_character,
-        character_description,
-        enable_faceswap,
-        faceswap_source_image,
-        faceswap_target_index,
         optimization_profile,
         enable_windows_compile_probe,
         enable_cuda_graphs,
         enable_optional_accelerators,
-        enable_pose_preservation,
-        pose_detector_type,
-        pose_mode,
-        controlnet_strength,
-        enable_gender_preservation,
-        gender_strength,
-        enable_prompt_upsampling,
         enable_klein_anatomy_fix,
-        character_references: Optional[List[Any]] = None,
         progress_callback: Optional[Callable] = None,
     ):
         self.stop_requested = False
@@ -102,9 +89,6 @@ class BatchGenerator:
         try:
             self.pm.ensure_models_downloaded(
                 model_choice,
-                enable_multi_character=enable_multi_character,
-                enable_faceswap=enable_faceswap,
-                enable_pose_preservation=enable_pose_preservation,
                 enable_klein_anatomy_fix=enable_klein_anatomy_fix,
                 progress=progress_callback
             )
@@ -114,50 +98,7 @@ class BatchGenerator:
         pipe = self.pm.load_pipeline(model_choice, device)
         current_model = self.pm.current_model
 
-        # 4. Multi-Character PuLID Setup
-        character_embeddings = []
-        if enable_multi_character and character_references:
-            try:
-                from src.image.pulid_helper import MultiCharacterManager
-                target_dim = 3072
-                if "klein-4B" in current_model:
-                    target_dim = 7680
-
-                manager = MultiCharacterManager(device=device)
-                char_state_path = os.path.join(self.pm.state_dir, CHARACTER_MANAGER_STATE_FILENAME)
-                if os.path.exists(char_state_path):
-                    manager.load_state(char_state_path)
-                    for i, ref_img in enumerate(character_references):
-                        if ref_img is not None and i < len(manager.characters):
-                            manager.assign_reference_image(manager.characters[i]['character_id'], ref_img)
-                    character_embeddings = manager.get_embeddings_for_generation(target_dim=target_dim)
-            except Exception as e:
-                print(f"  Warning: Multi-character PuLID setup failed: {e}")
-
-        # 5. Pose & Helpers
-        cn_pipe_instance = None
-        extractor_instance = None
-        current_extraction_mode = "body_face"
-        if enable_pose_preservation:
-            try:
-                from src.image.pose_helper import get_pose_extractor
-                from diffusers import FluxControlNetPipeline
-                cn = self.pm.load_controlnet_union(device)
-                if cn:
-                    cn_pipe_instance = FluxControlNetPipeline(
-                        scheduler=pipe.scheduler, vae=pipe.vae,
-                        text_encoder=pipe.text_encoder, tokenizer=pipe.tokenizer,
-                        text_encoder_2=getattr(pipe, 'text_encoder_2', None),
-                        tokenizer_2=getattr(pipe, 'tokenizer_2', None),
-                        transformer=pipe.transformer, controlnet=cn
-                    )
-                    extractor_instance = get_pose_extractor(device=device, detector_type=pose_detector_type)
-                    mode_map = {"Body Only": "body", "Body + Face": "body_face", "Body + Face + Hands": "body_face_hands"}
-                    current_extraction_mode = mode_map.get(pose_mode, "body_face")
-            except Exception as e:
-                print(f"  Warning: Batch pose setup failed: {e}")
-
-        # 6. Run Batch Processing
+        # Run Batch Processing
         def progress_wrapper(p, desc):
             if progress_callback: progress_callback(p, desc=desc)
             if self.stop_requested: raise RuntimeError("Cancelled by user")
@@ -178,20 +119,6 @@ class BatchGenerator:
                 input_folder=input_folder,
                 preset=batch_resolution_preset or "~1024px",
                 downscale_factor=downscale_factor,
-                enable_pose_preservation=(enable_pose_preservation and cn_pipe_instance and extractor_instance),
-                cn_pipe=cn_pipe_instance,
-                extractor=extractor_instance,
-                controlnet_strength=controlnet_strength,
-                extraction_mode=current_extraction_mode,
-                pose_detector_type=pose_detector_type,
-                enable_faceswap=enable_faceswap,
-                faceswap_source_image=faceswap_source_image,
-                faceswap_target_index=faceswap_target_index,
-                enable_gender_preservation=enable_gender_preservation,
-                gender_strength=gender_strength,
-                enable_prompt_upsampling=enable_prompt_upsampling,
-                character_embeddings=character_embeddings,
-                enable_multi_character=enable_multi_character,
                 model_choice=current_model,
                 optimization_profile=getattr(self.pm, "optimization_profile", "balanced"),
                 autocast_ctx=(
@@ -222,24 +149,11 @@ class BatchGenerator:
         model_choice,
         lora_file,
         lora_strength,
-        enable_multi_character,
-        character_description,
-        enable_faceswap,
-        faceswap_source_image,
-        faceswap_target_index,
         optimization_profile,
         enable_windows_compile_probe,
         enable_cuda_graphs,
         enable_optional_accelerators,
-        enable_pose_preservation,
-        pose_detector_type,
-        pose_mode,
-        controlnet_strength,
-        enable_gender_preservation,
-        gender_strength,
-        enable_prompt_upsampling,
         enable_klein_anatomy_fix,
-        character_references: Optional[List[Any]] = None,
         progress_callback: Optional[Callable] = None,
     ):
         self.stop_requested = False
@@ -290,7 +204,7 @@ class BatchGenerator:
             total_frames = len(extracted_paths)
 
             # 2. Model Prep
-            self.pm.ensure_models_downloaded(model_choice, enable_multi_character=enable_multi_character, enable_faceswap=enable_faceswap, enable_pose_preservation=enable_pose_preservation)
+            self.pm.ensure_models_downloaded(model_choice)
             pipe = self.pm.load_pipeline(model_choice, device)
 
             # 3. Batch Processing
@@ -304,10 +218,6 @@ class BatchGenerator:
                 prompt=prompt, negative_prompt=negative_prompt, steps=steps, guidance=guidance, seed=seed,
                 img2img_strength=img2img_strength,
                 input_folder=frames_dir, preset=video_resolution_preset, downscale_factor="1x",
-                enable_pose_preservation=enable_pose_preservation, enable_faceswap=enable_faceswap,
-                enable_gender_preservation=enable_gender_preservation,
-                enable_prompt_upsampling=enable_prompt_upsampling,
-                enable_multi_character=enable_multi_character,
                 model_choice=self.pm.current_model,
             )
 

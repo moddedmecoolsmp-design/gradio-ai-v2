@@ -70,8 +70,6 @@ from src.constants import (
     FAST_FLUX_STATE_MIGRATION_KEY,
     GRADIO_DELETE_CACHE,
     KLEIN_ANATOMY_LORA_URL,
-    POSE_MODES,
-    POSE_DETECTOR_TYPES,
 )
 from src.ui.gradio_app import create_ui
 from src.core.video_processor import (
@@ -336,17 +334,6 @@ def build_initial_state(available_devices, default_device):
         )
         save_json_safe(STATE_PATH, state_data)
 
-    # New Features
-    enable_multi_character = get_bool(persisted_state.enable_multi_character)
-    character_input_folder = get_text(persisted_state.character_input_folder)
-    character_description = get_text(persisted_state.character_description)
-    enable_faceswap = get_bool(persisted_state.enable_faceswap)
-    # faceswap_source_image handled separately if needed, but we'll try to persist it
-    faceswap_source_names = persisted_state.faceswap_source_names
-    faceswap_source_image = load_images_from_dir(faceswap_source_names, STATE_IMAGES_DIR)
-    faceswap_source_image = faceswap_source_image[0] if faceswap_source_image else None
-
-    faceswap_target_index = clamp_int(persisted_state.faceswap_target_index, 0, 10, 0)
     optimization_profile = sanitize_choice(
         persisted_state.optimization_profile,
         ["max_speed", "balanced", "stability"],
@@ -360,14 +347,6 @@ def build_initial_state(available_devices, default_device):
         persisted_state.enable_optional_accelerators,
         fallback=DEFAULT_OPTIONAL_ACCELERATORS,
     )
-    enable_pose_preservation = get_bool(persisted_state.enable_pose_preservation)
-    pose_detector_type = sanitize_choice(persisted_state.pose_detector_type, POSE_DETECTOR_TYPES, "dwpose")
-    pose_mode = sanitize_choice(persisted_state.pose_mode, POSE_MODES, "Body + Face")
-    controlnet_strength = clamp_float(persisted_state.controlnet_strength, 0.0, 1.0, 0.7)
-    show_pose_skeleton = get_bool(persisted_state.show_pose_skeleton)
-    enable_gender_preservation = get_bool(persisted_state.enable_gender_preservation, fallback=True)
-    gender_strength = clamp_float(persisted_state.gender_strength, 0.5, 2.0, 1.0)
-    enable_prompt_upsampling = get_bool(persisted_state.enable_prompt_upsampling, fallback=False)
 
     # Video Processing
     video_output_path = get_text(persisted_state.video_output_path)
@@ -377,13 +356,6 @@ def build_initial_state(available_devices, default_device):
         SINGLE_RESOLUTION_PRESETS,
         SINGLE_RESOLUTION_PRESETS[0],
     )
-
-    # Character reference slots
-    char_ref_names = persisted_state.character_reference_names
-    character_references = load_images_from_dir(char_ref_names, STATE_CHAR_REFS_DIR)
-    # Pad to 10
-    while len(character_references) < 10:
-        character_references.append(None)
 
     initial_state = {
         "model_choice": model_choice,
@@ -404,28 +376,14 @@ def build_initial_state(available_devices, default_device):
         "enable_klein_anatomy_fix": enable_klein_anatomy_fix,
         "device": device,
         "lora_file": lora_file,
+        "builtin_lora": persisted_state.builtin_lora if hasattr(persisted_state, "builtin_lora") else None,
         "lora_strength": lora_strength,
-        "enable_multi_character": enable_multi_character,
-        "character_input_folder": character_input_folder,
-        "character_description": character_description,
-        "enable_faceswap": enable_faceswap,
-        "faceswap_source_image": faceswap_source_image,
-        "faceswap_target_index": faceswap_target_index,
         "optimization_profile": optimization_profile,
         "enable_windows_compile_probe": enable_windows_compile_probe,
         "enable_optional_accelerators": enable_optional_accelerators,
-        "enable_pose_preservation": enable_pose_preservation,
-        "pose_detector_type": pose_detector_type,
-        "pose_mode": pose_mode,
-        "controlnet_strength": controlnet_strength,
-        "show_pose_skeleton": show_pose_skeleton,
-        "enable_gender_preservation": enable_gender_preservation,
-        "gender_strength": gender_strength,
-        "enable_prompt_upsampling": enable_prompt_upsampling,
         "video_output_path": video_output_path,
         "preserve_audio": preserve_audio,
         "video_resolution_preset": video_resolution_preset,
-        "character_references": character_references,
         FAST_FLUX_STATE_MIGRATION_KEY: fast_flux_state_migrated,
     }
     return initial_state, input_images
@@ -451,29 +409,15 @@ def persist_ui_state(
     enable_klein_anatomy_fix,
     device,
     lora_file,
+    builtin_lora,
     lora_strength,
-    enable_multi_character,
-    character_input_folder,
-    character_description,
-    enable_faceswap,
-    faceswap_source_image,
-    faceswap_target_index,
     optimization_profile,
     enable_windows_compile_probe,
     enable_cuda_graphs,
     enable_optional_accelerators,
-    enable_pose_preservation,
-    pose_detector_type,
-    pose_mode,
-    controlnet_strength,
-    show_pose_skeleton,
-    enable_gender_preservation,
-    gender_strength,
-    enable_prompt_upsampling,
     video_output_path,
     preserve_audio,
     video_resolution_preset,
-    *character_references
 ):
     existing_state = load_json_safe(STATE_PATH)
     img2img_strength = coerce_float(img2img_strength, 0.6)
@@ -498,24 +442,12 @@ def persist_ui_state(
         enable_klein_anatomy_fix=bool(enable_klein_anatomy_fix),
         device=device,
         lora_file=lora_file if lora_file else None,
+        builtin_lora=builtin_lora if builtin_lora else None,
         lora_strength=float(lora_strength) if lora_strength is not None else 1.0,
-        enable_multi_character=bool(enable_multi_character),
-        character_input_folder=character_input_folder or "",
-        character_description=character_description or "",
-        enable_faceswap=bool(enable_faceswap),
-        faceswap_target_index=safe_int_value(faceswap_target_index, 0),
         optimization_profile=optimization_profile or DEFAULT_OPTIMIZATION_PROFILE,
         enable_windows_compile_probe=bool(enable_windows_compile_probe),
         enable_cuda_graphs=bool(enable_cuda_graphs),
         enable_optional_accelerators=bool(enable_optional_accelerators),
-        enable_pose_preservation=bool(enable_pose_preservation),
-        pose_detector_type=pose_detector_type,
-        pose_mode=pose_mode,
-        controlnet_strength=float(controlnet_strength) if controlnet_strength is not None else 0.7,
-        show_pose_skeleton=bool(show_pose_skeleton),
-        enable_gender_preservation=bool(enable_gender_preservation),
-        gender_strength=float(gender_strength) if gender_strength is not None else 1.0,
-        enable_prompt_upsampling=bool(enable_prompt_upsampling),
         video_output_path=video_output_path or "",
         preserve_audio=bool(preserve_audio),
         video_resolution_preset=video_resolution_preset,
@@ -526,16 +458,6 @@ def persist_ui_state(
     }
     state.update(compatibility_state)
     state["input_image_names"] = save_input_images(input_images)
-
-    # Save faceswap source image
-    if faceswap_source_image:
-        state["faceswap_source_names"] = save_images_to_dir([faceswap_source_image], "fs", STATE_IMAGES_DIR, max_count=1)
-    else:
-        state["faceswap_source_names"] = []
-
-    # Save character references
-    clear_dir(STATE_CHAR_REFS_DIR)
-    state["character_reference_names"] = save_images_to_dir(character_references, "char", STATE_CHAR_REFS_DIR, max_count=10)
 
     save_json_safe(STATE_PATH, state)
     return state
@@ -634,7 +556,7 @@ def is_windows_fast_flux_device(device: str) -> bool:
     )
 
 
-def apply_prompt_preset(preset_name, current_prompt, current_negative, current_strength, current_steps, current_lora_file, current_lora_strength, current_guidance):
+def apply_prompt_preset(preset_name, current_prompt, current_negative, current_strength, current_steps, current_lora_file, current_builtin_lora, current_lora_strength, current_guidance):
     if preset_name in ANIME_PHOTO_PRESETS:
         preset = ANIME_PHOTO_PRESETS[preset_name]
         strength = preset.get("strength", current_strength)
@@ -647,6 +569,7 @@ def apply_prompt_preset(preset_name, current_prompt, current_negative, current_s
         lora_ref = preset.get("lora")
         if lora_ref == "zimage_realistic":
             lora_path = pipeline_manager.zimage_realistic_lora_path
+            builtin_lora = "Realistic Snapshot v5 (Z-Image)"
             if os.path.exists(lora_path):
                 lora_file = lora_path
                 lora_strength = preset.get("lora_strength", 0.70)
@@ -656,6 +579,7 @@ def apply_prompt_preset(preset_name, current_prompt, current_negative, current_s
                 print(f"[Preset] LoRA will be downloaded on first use: {os.path.basename(lora_path)}")
         elif lora_ref == "flux_anime2real":
             lora_path = pipeline_manager.flux_anime2real_lora_path
+            builtin_lora = "Ultra Real Amateur Selfies (FLUX 4B)"
             if os.path.exists(lora_path):
                 lora_file = lora_path
                 lora_strength = preset.get("lora_strength", 0.80)
@@ -665,10 +589,11 @@ def apply_prompt_preset(preset_name, current_prompt, current_negative, current_s
                 print(f"[Preset] LoRA will be downloaded on first use: {os.path.basename(lora_path)}")
         else:
             lora_file = current_lora_file
+            builtin_lora = current_builtin_lora
             lora_strength = current_lora_strength
 
-        return preset["prompt"], preset["negative_prompt"], strength, steps, lora_file, lora_strength, guidance
-    return current_prompt, current_negative, current_strength, current_steps, current_lora_file, current_lora_strength, current_guidance
+        return preset["prompt"], preset["negative_prompt"], strength, steps, lora_file, builtin_lora, lora_strength, guidance
+    return current_prompt, current_negative, current_strength, current_steps, current_lora_file, current_builtin_lora, current_lora_strength, current_guidance
 
 
 def build_pipe_kwargs(prompt, negative_prompt, target_pipe=None):
@@ -1037,11 +962,8 @@ def run_model_preflight_at_startup(initial_model_choice: str, device: str, state
         print(reason)
 
     try:
-        ensure_models_downloaded(
+        pipeline_manager.ensure_models_downloaded(
             resolved_choice,
-            enable_multi_character=bool(state.get("enable_multi_character", False)),
-            enable_faceswap=bool(state.get("enable_faceswap", False)),
-            enable_pose_preservation=bool(state.get("enable_pose_preservation", False)),
             enable_klein_anatomy_fix=bool(state.get("enable_klein_anatomy_fix", False)),
             progress=None,
         )
@@ -1065,59 +987,16 @@ def _legacy_generate_image_impl(
     img2img_strength,
     lora_file,
     lora_strength,
-    enable_multi_character,
-    character_input_folder,
-    character_description,
-    enable_faceswap,
-    faceswap_source_image,
-    faceswap_target_index,
     optimization_profile,
     enable_windows_compile_probe,
     enable_cuda_graphs,
     enable_optional_accelerators,
-    enable_pose_preservation,
-    pose_detector_type,
-    pose_mode,
-    controlnet_strength,
-    show_pose_skeleton,
-    enable_gender_preservation,
     preset_choice,
-    gender_strength,
-    enable_prompt_upsampling,
     enable_klein_anatomy_fix,
-    *character_references,  # Captures the 10 reference image slots
     progress=gr.Progress()
 ):
     """Generate image with automatic model download if needed."""
     STOP_EVENT.clear()
-
-    # --- Multi-Character PuLID Setup ---
-    character_embeddings = []
-
-    # Determine target dimension for PuLID based on model choice
-    target_dim = 3072 # Default for FLUX.1
-    if "klein-4B" in model_choice or "klein-4b" in model_choice:
-        target_dim = 7680
-
-    if enable_multi_character:
-        try:
-            from src.image.pulid_helper import MultiCharacterManager
-            manager = MultiCharacterManager(device=device)
-            char_state_path = os.path.join(STATE_DIR, CHARACTER_MANAGER_STATE_FILENAME)
-            if os.path.exists(char_state_path):
-                manager.load_state(char_state_path)
-
-                # Assign the current reference images from UI to the manager
-                for i, ref_img in enumerate(character_references):
-                    if ref_img is not None and i < len(manager.characters):
-                        char_id = manager.characters[i]['character_id']
-                        manager.assign_reference_image(char_id, ref_img)
-
-                character_embeddings = manager.get_embeddings_for_generation(target_dim=target_dim)
-                if character_embeddings:
-                    print(f"  Using {len(character_embeddings)} character reference(s) for PuLID ({target_dim} dims)")
-        except Exception as e:
-            print(f"  Warning: Multi-character PuLID setup failed: {e}")
 
     model_choice, pre_download_reason = resolve_model_choice_for_device(
         model_choice,
@@ -1140,92 +1019,6 @@ def _legacy_generate_image_impl(
     if STOP_EVENT.is_set():
         return None, "Cancelled by user.", None
 
-    # Apply character consistency to prompt if enabled
-    if character_description:
-        from src.image.pulid_helper import enhance_prompt_with_character_description
-        prompt = enhance_prompt_with_character_description(prompt, character_description)
-        print(f"Enhanced prompt with character description: {prompt[:100]}...")
-
-    if enable_prompt_upsampling and input_images is not None and len(input_images) > 0:
-        try:
-            first_image = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-            prompt, upsample_err = upsample_prompt_from_image(prompt, first_image, device=device)
-            if upsample_err:
-                print(f"VLM prompt upsampling error: {upsample_err}")
-            else:
-                print(f"VLM prompt upsampling applied ({len(prompt)} chars)")
-        except Exception as e:
-            print(f"VLM prompt upsampling failed: {e}")
-
-    # Gender preservation: detect genders and enhance prompts
-    if enable_gender_preservation and input_images is not None and len(input_images) > 0:
-        try:
-            from src.core.gender_helper import (
-                get_gender_details,
-                enhance_prompt_with_gender,
-                get_gender_negative_prompt,
-                merge_negative_prompts,
-                get_cached_face_app
-            )
-
-            first_image = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-            face_app = get_cached_face_app(device=device)
-            gender_info = get_gender_details(first_image, face_app)
-
-            if gender_info['total_faces'] > 0:
-                print(f"  Gender detection: {gender_info['male_count']} male, {gender_info['female_count']} female")
-
-                # Enhance prompt with gender keywords
-                prompt = enhance_prompt_with_gender(prompt, gender_info, strength=gender_strength)
-
-                # Add gender-specific negative prompts
-                gender_neg = get_gender_negative_prompt(gender_info, strength=gender_strength * 1.3)
-                negative_prompt = merge_negative_prompts(negative_prompt, gender_neg)
-
-                print(f"  Gender-enhanced prompt: {prompt[:80]}...")
-            else:
-                print("  No faces detected for gender preservation")
-
-        except Exception as e:
-            print(f"  Warning: Gender preservation failed: {e}")
-
-    # Extract pose if pose preservation is enabled
-    pose_image = None
-    if enable_pose_preservation and input_images is not None and len(input_images) > 0:
-        try:
-            from src.image.pose_helper import get_pose_extractor
-            
-            print(f"Extracting pose in '{pose_mode}' mode...")
-            first_image = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-            
-            # Map UI mode to pose_helper mode
-            mode_map = {
-                "Body Only": "body",
-                "Body + Face": "body_face",
-                "Body + Face + Hands": "body_face_hands"
-            }
-            extraction_mode = mode_map.get(pose_mode, "body_face")
-
-            extractor = get_pose_extractor(device=device, detector_type=pose_detector_type)
-            pose_image = extractor.extract_pose(
-                first_image,
-                mode=extraction_mode,
-                detect_resolution=512,
-                image_resolution=max(int(height), int(width))
-            )
-            
-            if pose_image is None:
-                print("  Warning: Pose extraction failed, continuing without pose control")
-                enable_pose_preservation = False
-            else:
-                print(f"  Pose extracted successfully")
-                
-        except Exception as e:
-            print(f"  Warning: Pose extraction error: {e}")
-            print("  Continuing without pose control")
-            enable_pose_preservation = False
-            pose_image = None
-
     # Check and download models if missing (only when user presses Generate)
     # Determine LoRA download flags based on preset
     enable_zimage_realistic_lora = False
@@ -1241,11 +1034,9 @@ def _legacy_generate_image_impl(
     try:
         ensure_models_downloaded(
             model_choice,
-            enable_multi_character=enable_multi_character,
-            enable_faceswap=enable_faceswap,
-            enable_pose_preservation=enable_pose_preservation,
             enable_zimage_realistic_lora=enable_zimage_realistic_lora,
             enable_flux_anime2real_lora=enable_flux_anime2real_lora,
+            enable_klein_anatomy_fix=enable_klein_anatomy_fix,
             progress=progress
         )
     except Exception as e:
@@ -1280,11 +1071,10 @@ def _legacy_generate_image_impl(
     generation_mode = choose_image_generation_mode(
         current_model=pipeline_manager.current_model,
         has_input_images=(input_images is not None and len(input_images) > 0),
-        enable_pose_preservation=enable_pose_preservation,
     )
     will_enable_cpu_offload = pipeline_manager.should_enable_cpu_offload(
         pipeline_manager.current_model,
-        bool(enable_pose_preservation and pose_image is not None),
+        True,
         device,
     )
     pipe, optional_accelerator_status = pipeline_manager.prepare_flux_sdnq_optional_accelerators(
@@ -1294,25 +1084,11 @@ def _legacy_generate_image_impl(
         enable_optional_accelerators=optional_accelerators_enabled,
         mode="single",
         has_lora=bool(lora_file) or bool(enable_klein_anatomy_fix),
-        has_pulid=bool(enable_multi_character and character_embeddings),
-        has_faceswap=bool(enable_faceswap and faceswap_source_image is not None),
-        has_pose_control=bool(enable_pose_preservation and pose_image is not None),
         has_cpu_offload=will_enable_cpu_offload,
     )
     effective_optional_accelerators_enabled = bool(optional_accelerator_status.get("enabled", False))
 
-    # --- Apply PuLID Patching ---
-    pulid_patch = None
-    if enable_multi_character and character_embeddings:
-        try:
-            from src.image.pulid_helper import PuLIDFluxPatch
-            pulid_patch = PuLIDFluxPatch(pipe.transformer, character_embeddings)
-            pulid_patch.patch()
-        except Exception as e:
-            print(f"  Warning: PuLID patching failed: {e}")
-
     if STOP_EVENT.is_set():
-        if pulid_patch: pulid_patch.unpatch()
         return None, "Cancelled by user.", None
 
     supports_lora_model = (
@@ -1382,71 +1158,6 @@ def _legacy_generate_image_impl(
 
     with torch.inference_mode(), autocast_ctx:
         if is_flux_model(pipeline_manager.current_model):
-            # Handle pose-conditioned generation with ControlNet
-            if enable_pose_preservation and pose_image is not None:
-                log_generation_runtime_stack(
-                    resolved_profile,
-                    compile_probe_enabled,
-                    optional_accelerator_status,
-                    device,
-                    pipeline_manager.current_model,
-                    base_policy,
-                )
-                try:
-                    from diffusers import FluxControlNetPipeline
-                    
-                    # Load ControlNet Union if not already loaded
-                    cn = load_controlnet_union(device)
-                    
-                    if cn is not None:
-                        print(f"Creating ControlNet pipeline with pose conditioning (strength={controlnet_strength})...")
-
-                        # Create ControlNet pipeline using existing pipe components
-                        # FLUX requires dual text encoders (CLIP + T5)
-                        cn_pipe = FluxControlNetPipeline(
-                            scheduler=pipe.scheduler,
-                            vae=pipe.vae,
-                            text_encoder=pipe.text_encoder,
-                            tokenizer=pipe.tokenizer,
-                            text_encoder_2=getattr(pipe, 'text_encoder_2', None),
-                            tokenizer_2=getattr(pipe, 'tokenizer_2', None),
-                            transformer=pipe.transformer,
-                            controlnet=cn,
-                        )
-
-                        # Resize pose image to match output dimensions
-                        pose_resized = pose_image.resize((int(width), int(height)), Image.Resampling.LANCZOS)
-
-                        pipe_kwargs = build_pipe_kwargs(prompt, negative_prompt)
-
-                        image = cn_pipe(
-                            **pipe_kwargs,
-                            control_image=pose_resized,
-                            height=int(height),
-                            width=int(width),
-                            num_inference_steps=int(steps),
-                            guidance_scale=final_guidance,
-                            controlnet_conditioning_scale=float(controlnet_strength),
-                            generator=generator,
-                            num_images_per_prompt=1,
-                        ).images[0]
-                        
-                        mode = "txt2img+pose"
-                        
-                        # Return with pose skeleton if requested
-                        if show_pose_skeleton:
-                            return image, f"Seed: {seed} | Mode: {mode} | Pose: {pose_mode}", pose_image
-                        else:
-                            return image, f"Seed: {seed} | Mode: {mode} | Pose: {pose_mode}", None
-                    else:
-                        print("  ControlNet not available, falling back to standard generation")
-                        enable_pose_preservation = False
-                        
-                except Exception as e:
-                    print(f"  Warning: ControlNet generation failed: {e}")
-                    print("  Falling back to standard generation")
-                    enable_pose_preservation = False
-            
             if generation_mode == "flux-img2img":
                 base_width, base_height = apply_scale_to_dimensions(int(width), int(height), downscale_factor)
                 attempt_error = None
@@ -2937,31 +2648,17 @@ def generate_image(
     downscale_factor,
     img2img_strength,
     lora_file,
+    builtin_lora,
     lora_strength,
-    enable_multi_character,
-    character_input_folder,
-    character_description,
-    enable_faceswap,
-    faceswap_source_image,
-    faceswap_target_index,
     optimization_profile,
     enable_windows_compile_probe,
     enable_cuda_graphs,
     enable_optional_accelerators,
-    enable_pose_preservation,
-    pose_detector_type,
-    pose_mode,
-    controlnet_strength,
-    show_pose_skeleton,
-    enable_gender_preservation,
-    gender_strength,
-    enable_prompt_upsampling,
+    preset_choice,
     enable_klein_anatomy_fix,
-    *character_references,
     progress=gr.Progress()
 ):
     STOP_EVENT.clear()
-    _ = character_input_folder
     downscale_factor = normalize_downscale_factor(downscale_factor)
     height = safe_int_value(height, 1024)
     width = safe_int_value(width, 1024)
@@ -2970,7 +2667,25 @@ def generate_image(
     width = (width // 16) * 16 or 16
     steps = safe_int_value(steps, 4)
     seed = safe_int_value(seed, -1)
-    faceswap_target_index = safe_int_value(faceswap_target_index, 0)
+
+    # Resolve built-in LoRA selection to actual file path
+    if builtin_lora and builtin_lora != "None (Custom File Upload)":
+        # Map dropdown display value to internal key
+        lora_key_map = {
+            "Klein Anatomy Fix": "klein_anatomy",
+            "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
+            "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
+        }
+        lora_key = lora_key_map.get(builtin_lora)
+        if lora_key:
+            # Auto-download if needed and get path
+            lora_path = pipeline_manager.ensure_builtin_lora_downloaded(lora_key, progress)
+            if lora_path:
+                lora_file = lora_path
+            else:
+                print(f"Warning: Could not download built-in LoRA: {builtin_lora}")
+                lora_file = None
+
     return gen.generate(
         prompt=prompt,
         negative_prompt=negative_prompt,
@@ -2986,20 +2701,6 @@ def generate_image(
         img2img_strength=img2img_strength,
         lora_file=lora_file,
         lora_strength=lora_strength,
-        enable_multi_character=enable_multi_character,
-        character_references=list(character_references),
-        character_description=character_description,
-        enable_faceswap=enable_faceswap,
-        faceswap_source_image=faceswap_source_image,
-        faceswap_target_index=faceswap_target_index,
-        enable_pose_preservation=enable_pose_preservation,
-        pose_detector_type=pose_detector_type,
-        pose_mode=pose_mode,
-        controlnet_strength=controlnet_strength,
-        show_pose_skeleton=show_pose_skeleton,
-        enable_gender_preservation=enable_gender_preservation,
-        gender_strength=gender_strength,
-        enable_prompt_upsampling=enable_prompt_upsampling,
         enable_klein_anatomy_fix=enable_klein_anatomy_fix,
         optimization_profile=optimization_profile,
         enable_windows_compile_probe=enable_windows_compile_probe,
@@ -3024,31 +2725,17 @@ def batch_process_folder(
     device,
     model_choice,
     lora_file,
+    builtin_lora,
     lora_strength,
-    enable_multi_character,
-    character_input_folder,
-    character_description,
-    enable_faceswap,
-    faceswap_source_image,
-    faceswap_target_index,
     optimization_profile,
     enable_windows_compile_probe,
     enable_cuda_graphs,
     enable_optional_accelerators,
-    enable_pose_preservation,
-    pose_detector_type,
-    pose_mode,
-    controlnet_strength,
-    enable_gender_preservation,
-    gender_strength,
-    enable_prompt_upsampling,
     enable_klein_anatomy_fix,
     preset_choice,
-    *character_references,
     progress=gr.Progress(),
 ):
     STOP_EVENT.clear()
-    _ = character_input_folder
     downscale_factor = normalize_downscale_factor(downscale_factor)
     height = safe_int_value(height, 1024)
     width = safe_int_value(width, 1024)
@@ -3057,7 +2744,24 @@ def batch_process_folder(
     width = (width // 16) * 16 or 16
     steps = safe_int_value(steps, 4)
     seed = safe_int_value(seed, -1)
-    faceswap_target_index = safe_int_value(faceswap_target_index, 0)
+
+    # Resolve built-in LoRA selection to actual file path
+    if builtin_lora and builtin_lora != "None (Custom File Upload)":
+        # Map dropdown display value to internal key
+        lora_key_map = {
+            "Klein Anatomy Fix": "klein_anatomy",
+            "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
+            "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
+        }
+        lora_key = lora_key_map.get(builtin_lora)
+        if lora_key:
+            # Auto-download if needed and get path
+            lora_path = pipeline_manager.ensure_builtin_lora_downloaded(lora_key, progress)
+            if lora_path:
+                lora_file = lora_path
+            else:
+                print(f"Warning: Could not download built-in LoRA: {builtin_lora}")
+                lora_file = None
 
     # Determine and download built-in LoRA based on preset
     enable_zimage_realistic_lora = False
@@ -3105,24 +2809,11 @@ def batch_process_folder(
         model_choice=model_choice,
         lora_file=lora_file,
         lora_strength=lora_strength,
-        enable_multi_character=enable_multi_character,
-        character_description=character_description,
-        enable_faceswap=enable_faceswap,
-        faceswap_source_image=faceswap_source_image,
-        faceswap_target_index=faceswap_target_index,
         optimization_profile=optimization_profile,
         enable_windows_compile_probe=enable_windows_compile_probe,
         enable_cuda_graphs=enable_cuda_graphs,
         enable_optional_accelerators=enable_optional_accelerators,
-        enable_pose_preservation=enable_pose_preservation,
-        pose_detector_type=pose_detector_type,
-        pose_mode=pose_mode,
-        controlnet_strength=controlnet_strength,
-        enable_gender_preservation=enable_gender_preservation,
-        gender_strength=gender_strength,
-        enable_prompt_upsampling=enable_prompt_upsampling,
         enable_klein_anatomy_fix=enable_klein_anatomy_fix,
-        character_references=list(character_references),
         progress_callback=progress,
     )
 
@@ -3143,30 +2834,17 @@ def process_video(
     device,
     model_choice,
     lora_file,
+    builtin_lora,
     lora_strength,
-    enable_multi_character,
-    character_input_folder,
-    character_description,
-    enable_faceswap,
-    faceswap_source_image,
-    faceswap_target_index,
     optimization_profile,
     enable_windows_compile_probe,
     enable_cuda_graphs,
     enable_optional_accelerators,
-    enable_pose_preservation,
-    pose_detector_type,
-    pose_mode,
-    controlnet_strength,
-    enable_gender_preservation,
-    gender_strength,
     enable_klein_anatomy_fix,
     preset_choice,
-    *character_references,
     progress=gr.Progress(),
 ):
     STOP_EVENT.clear()
-    _ = character_input_folder
     height = safe_int_value(height, 1024)
     width = safe_int_value(width, 1024)
     # Both FLUX and Z-Image VAEs require dimensions divisible by 16.
@@ -3174,7 +2852,24 @@ def process_video(
     width = (width // 16) * 16 or 16
     steps = safe_int_value(steps, 4)
     seed = safe_int_value(seed, -1)
-    faceswap_target_index = safe_int_value(faceswap_target_index, 0)
+
+    # Resolve built-in LoRA selection to actual file path
+    if builtin_lora and builtin_lora != "None (Custom File Upload)":
+        # Map dropdown display value to internal key
+        lora_key_map = {
+            "Klein Anatomy Fix": "klein_anatomy",
+            "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
+            "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
+        }
+        lora_key = lora_key_map.get(builtin_lora)
+        if lora_key:
+            # Auto-download if needed and get path
+            lora_path = pipeline_manager.ensure_builtin_lora_downloaded(lora_key, progress)
+            if lora_path:
+                lora_file = lora_path
+            else:
+                print(f"Warning: Could not download built-in LoRA: {builtin_lora}")
+                lora_file = None
 
     # Determine and download built-in LoRA based on preset
     enable_zimage_realistic_lora = False
@@ -3224,24 +2919,11 @@ def process_video(
         model_choice=model_choice,
         lora_file=lora_file,
         lora_strength=lora_strength,
-        enable_multi_character=enable_multi_character,
-        character_description=character_description,
-        enable_faceswap=enable_faceswap,
-        faceswap_source_image=faceswap_source_image,
-        faceswap_target_index=faceswap_target_index,
         optimization_profile=optimization_profile,
         enable_windows_compile_probe=enable_windows_compile_probe,
         enable_cuda_graphs=enable_cuda_graphs,
         enable_optional_accelerators=enable_optional_accelerators,
-        enable_pose_preservation=enable_pose_preservation,
-        pose_detector_type=pose_detector_type,
-        pose_mode=pose_mode,
-        controlnet_strength=controlnet_strength,
-        enable_gender_preservation=enable_gender_preservation,
-        gender_strength=gender_strength,
-        enable_prompt_upsampling=False,
         enable_klein_anatomy_fix=enable_klein_anatomy_fix,
-        character_references=list(character_references),
         progress_callback=progress,
     )
 
@@ -3391,14 +3073,6 @@ def update_ui_for_model(model_choice, images, width, height, downscale_factor, d
     # Batch folder processing is FLUX-only (Z-Image not supported).
     show_batch = is_flux
 
-    # PuLID multi-character consistency patches the FLUX transformer
-    # directly — not compatible with Z-Image models.
-    show_pulid = is_flux
-
-    # ControlNet pose preservation requires FLUX ControlNet Union.
-    # Z-Image does not have a ControlNet implementation.
-    show_pose = is_flux
-
     single_preset = resolve_resolution_preset_for_model(model_choice, mode="single", device=device)
     batch_preset = resolve_resolution_preset_for_model(model_choice, mode="batch", device=device)
     video_preset = resolve_resolution_preset_for_model(model_choice, mode="video", device=device)
@@ -3425,6 +3099,7 @@ def update_ui_for_model(model_choice, images, width, height, downscale_factor, d
         gr.update(visible=is_edit_model, value=single_preset),  # resolution_preset
         gr.update(visible=is_edit_model),  # img2img_strength
         gr.update(visible=show_lora),  # lora_label
+        gr.update(visible=show_lora),  # builtin_lora
         gr.update(visible=show_lora),  # lora_file
         gr.update(visible=show_lora),  # lora_strength
         gr.update(visible=show_lora),  # clear_lora_btn
@@ -3435,8 +3110,6 @@ def update_ui_for_model(model_choice, images, width, height, downscale_factor, d
         gr.update(value=batch_preset),  # batch_resolution_preset
         gr.update(value=video_preset),  # video_resolution_preset
         gr.update(visible=show_batch),  # batch_tab
-        gr.update(visible=show_pulid),  # pulid_accordion
-        gr.update(visible=show_pose),  # pose_accordion
     )
 
 

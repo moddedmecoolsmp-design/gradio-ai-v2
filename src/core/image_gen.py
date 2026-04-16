@@ -48,25 +48,11 @@ class ImageGenerator:
         img2img_strength: float = 0.8,
         lora_file: Optional[str] = None,
         lora_strength: float = 1.0,
-        enable_multi_character: bool = False,
-        character_references: Optional[List[Any]] = None,
-        character_description: Optional[str] = None,
-        enable_faceswap: bool = False,
-        faceswap_source_image: Optional[Any] = None,
-        faceswap_target_index: int = 0,
-        enable_pose_preservation: bool = False,
-        pose_detector_type: str = "dwpose",
-        pose_mode: str = "Body + Face",
-        controlnet_strength: float = 0.6,
-        show_pose_skeleton: bool = False,
-        enable_gender_preservation: bool = False,
-        gender_strength: float = 0.5,
         enable_klein_anatomy_fix: bool = False,
         optimization_profile: Optional[str] = None,
         enable_windows_compile_probe: Optional[bool] = None,
         enable_cuda_graphs: Optional[bool] = None,
         enable_optional_accelerators: Optional[bool] = None,
-        enable_prompt_upsampling: bool = False,
         progress_callback: Optional[Callable] = None,
     ):
         self.stop_requested = False
@@ -78,7 +64,6 @@ class ImageGenerator:
         width = (width // 16) * 16 or 16
         steps = self._safe_int(steps, 20)
         seed = self._safe_int(seed, -1)
-        faceswap_target_index = self._safe_int(faceswap_target_index, 0)
         downscale_factor = self._normalize_downscale_factor(downscale_factor)
         # Skip redundant configure_optimization_policy calls when parameters haven't changed
         config_signature = (device, optimization_profile, enable_windows_compile_probe, enable_cuda_graphs, enable_optional_accelerators)
@@ -95,9 +80,6 @@ class ImageGenerator:
         try:
             self.pm.ensure_models_downloaded(
                 model_choice,
-                enable_multi_character=enable_multi_character,
-                enable_faceswap=enable_faceswap,
-                enable_pose_preservation=enable_pose_preservation,
                 enable_klein_anatomy_fix=enable_klein_anatomy_fix,
                 progress=progress_callback
             )
@@ -107,82 +89,10 @@ class ImageGenerator:
         pipe = self.pm.load_pipeline(model_choice, device)
         current_model = self.pm.current_model
 
-        # 2. Multi-Character PuLID Setup
-        character_embeddings = []
-        pulid_patch = None
-        if enable_multi_character and character_references:
-            try:
-                from src.image.pulid_helper import MultiCharacterManager, PuLIDFluxPatch
-                target_dim = 3072
-                if "klein-4B" in current_model:
-                    target_dim = 7680
-
-                manager = MultiCharacterManager(device=device)
-                char_state_path = os.path.join(self.pm.state_dir, CHARACTER_MANAGER_STATE_FILENAME)
-                if os.path.exists(char_state_path):
-                    manager.load_state(char_state_path)
-                    for i, ref_img in enumerate(character_references):
-                        if ref_img is not None and i < len(manager.characters):
-                            manager.assign_reference_image(manager.characters[i]['character_id'], ref_img)
-
-                    character_embeddings = manager.get_embeddings_for_generation(target_dim=target_dim)
-                    if character_embeddings:
-                        pulid_patch = PuLIDFluxPatch(pipe.transformer, character_embeddings)
-                        pulid_patch.patch()
-            except Exception as e:
-                print(f"  Warning: PuLID setup failed: {e}")
-
-        # 3. Prompt Enhancements (Character & Gender)
-        if character_description:
-            try:
-                from src.image.pulid_helper import enhance_prompt_with_character_description
-                prompt = enhance_prompt_with_character_description(prompt, character_description)
-            except ImportError: pass
-
-        if enable_prompt_upsampling and input_images:
-            try:
-                from src.image.vlm_prompt_upsampler import upsample_prompt_from_image
-                first_image = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-                prompt, upsample_err = upsample_prompt_from_image(prompt, first_image, device=device)
-                if upsample_err:
-                    print(f"  VLM prompt upsampling error: {upsample_err}")
-            except Exception as e:
-                print(f"  Warning: Prompt upsampling failed: {e}")
-
-        if enable_gender_preservation and input_images:
-            try:
-                from src.core.gender_helper import get_gender_details, enhance_prompt_with_gender, get_gender_negative_prompt, merge_negative_prompts, get_cached_face_app
-                first_image = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-                face_app = get_cached_face_app(device=device)
-                gender_info = get_gender_details(first_image, face_app)
-                if gender_info['total_faces'] > 0:
-                    prompt = enhance_prompt_with_gender(prompt, gender_info, strength=gender_strength)
-                    gender_neg = get_gender_negative_prompt(gender_info, strength=gender_strength * 1.3)
-                    negative_prompt = merge_negative_prompts(negative_prompt, gender_neg)
-            except Exception as e:
-                print(f"  Warning: Gender preservation failed: {e}")
-
-        # 4. Pose Extraction
-        pose_image = None
-        if enable_pose_preservation and input_images:
-            try:
-                from src.image.pose_helper import get_pose_extractor
-                first_image = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-                mode_map = {"Body Only": "body", "Body + Face": "body_face", "Body + Face + Hands": "body_face_hands"}
-                extractor = get_pose_extractor(device=device, detector_type=pose_detector_type)
-                pose_image = extractor.extract_pose(
-                    first_image,
-                    mode=mode_map.get(pose_mode, "body_face"),
-                    image_resolution=max(int(height), int(width))
-                )
-            except Exception as e:
-                print(f"  Warning: Pose extraction failed: {e}")
-
         if self.stop_requested:
-            if pulid_patch: pulid_patch.unpatch()
             return None, "Cancelled by user.", None
 
-        # 5. LoRA Loading
+        # LoRA Loading
         if lora_file:
             self.pm.load_lora(lora_file, lora_strength, device)
 
@@ -243,7 +153,7 @@ class ImageGenerator:
                     pass
         if hasattr(pipe, "enable_model_cpu_offload") and self.pm.should_enable_cpu_offload(
             current_model,
-            enable_pose_preservation,
+            True,
             device,
         ):
             pipe.enable_model_cpu_offload()
@@ -292,32 +202,7 @@ class ImageGenerator:
                 image = None
                 mode_str = "txt2img"
 
-                # A. ControlNet Path
-                if is_flux and enable_pose_preservation and pose_image:
-                    from diffusers import FluxControlNetPipeline
-                    cn = self.pm.load_controlnet_union(device)
-                    if cn:
-                        cn_pipe = FluxControlNetPipeline(
-                            scheduler=pipe.scheduler, vae=pipe.vae,
-                            text_encoder=pipe.text_encoder, tokenizer=pipe.tokenizer,
-                            text_encoder_2=getattr(pipe, 'text_encoder_2', None),
-                            tokenizer_2=getattr(pipe, 'tokenizer_2', None),
-                            transformer=pipe.transformer, controlnet=cn
-                        )
-                        pose_resized = pose_image.resize((int(width), int(height)), PILImage.Resampling.LANCZOS)
-                        image = cn_pipe(
-                            **get_pipe_kwargs(cn_pipe),
-                            control_image=pose_resized,
-                            height=int(height), width=int(width),
-                            num_inference_steps=int(steps),
-                            guidance_scale=final_guidance,
-                            controlnet_conditioning_scale=float(controlnet_strength),
-                            generator=generator,
-                            num_images_per_prompt=1,
-                        ).images[0]
-                        mode_str = "txt2img+pose"
-
-                # B. Img2Img Path
+                # Img2Img Path
                 if image is None and has_input:
                     img_w, img_h = self._scale_dims(width, height, downscale_factor)
                     processed_images = []
@@ -381,33 +266,16 @@ class ImageGenerator:
                     mode_str = "txt2img"
 
         except Exception as e:
-            if pulid_patch: pulid_patch.unpatch()
-            return None, f"Generation failed: {e}", None
+            return None, f"Generation failed: {e}"
 
-        if pulid_patch: pulid_patch.unpatch()
-        if self.stop_requested: return None, "Cancelled.", None
+        if self.stop_requested: return None, "Cancelled."
 
-        # 8. Post-processing (FaceSwap)
-        if enable_faceswap and faceswap_source_image and image:
-            try:
-                from src.image.faceswap_helper import get_faceswap_helper
-                swapper = get_faceswap_helper(device=device)
-                if not swapper.is_loaded: swapper.load_models()
-                image = swapper.swap_face(
-                    target_image=image, source_image=faceswap_source_image,
-                    face_index=int(faceswap_target_index), use_similarity=True
-                )
-            except Exception as e:
-                print(f"  Warning: Face swap failed: {e}")
-
-        # 9. Cleanup & Return
+        # Cleanup & Return
         self._cleanup(device)
 
         fallback_info = f" | Note: {self.pm.last_model_fallback_reason}" if self.pm.last_model_fallback_reason else ""
         status = f"Seed: {seed} | Mode: {mode_str} | Model: {current_model} | Device: {device}{fallback_info}"
-        return_pose = pose_image if (show_pose_skeleton and pose_image) else None
-
-        return image, status, return_pose
+        return image, status
 
     def _scale_dims(self, w, h, factor):
         base_w = self._safe_int(w, 512)

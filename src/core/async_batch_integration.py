@@ -183,23 +183,6 @@ def create_batch_processor_func(
     preset = fixed_kwargs.get("preset", "~1024px")
     downscale_factor = fixed_kwargs.get("downscale_factor", 1.0)
     img2img_strength = fixed_kwargs.get("img2img_strength", 1.0)
-    enable_pose_preservation = fixed_kwargs.get("enable_pose_preservation", False)
-    cn_pipe = fixed_kwargs.get("cn_pipe")
-    extractor = fixed_kwargs.get("extractor")
-    extraction_mode = fixed_kwargs.get("extraction_mode", "body_face")
-    controlnet_strength = fixed_kwargs.get("controlnet_strength", 0.5)
-    enable_faceswap = fixed_kwargs.get("enable_faceswap", False)
-    faceswap_source_image = fixed_kwargs.get("faceswap_source_image")
-    faceswap_target_index = fixed_kwargs.get("faceswap_target_index", 0)
-    enable_gender_preservation = fixed_kwargs.get("enable_gender_preservation", False)
-    gender_strength = fixed_kwargs.get("gender_strength", 1.0)
-    enable_prompt_upsampling = fixed_kwargs.get("enable_prompt_upsampling", False)
-    character_embeddings = fixed_kwargs.get("character_embeddings", [])
-    enable_multi_character = fixed_kwargs.get("enable_multi_character", False)
-
-    if enable_pose_preservation and (cn_pipe is None or extractor is None):
-        print("  Pose preservation requested but cn_pipe/extractor not wired; disabling pose path for this run.")
-        enable_pose_preservation = False
 
     async def process_batch(
         paths: List[str],
@@ -247,45 +230,9 @@ def create_batch_processor_func(
             current_seed = base_seed_val + int(batch_indices[i])
             seeds.append(current_seed)
             
-            # Prompts (Gender Preservation)
+            # Prompts
             current_prompt = prompt
             current_negative = negative_prompt
-            
-            if enable_prompt_upsampling:
-                try:
-                    current_prompt, upsample_err = upsample_prompt_from_image(
-                        current_prompt,
-                        resized_images[i],
-                        device=device,
-                    )
-                    if upsample_err:
-                        print(f"  VLM prompt upsampling error (img {i}): {upsample_err}")
-                except Exception as exc:
-                    print(f"  VLM prompt upsampling failed (img {i}): {exc}")
-
-            if enable_gender_preservation:
-                try:
-                    from src.core.gender_helper import (
-                        get_gender_details,
-                        enhance_prompt_with_gender,
-                        get_gender_negative_prompt,
-                        merge_negative_prompts,
-                        get_cached_face_app
-                    )
-                    face_app = get_cached_face_app(device=device)
-                    # Note: get_gender_details might be slow, could be optimized further
-                    gender_info = get_gender_details(resized_images[i], face_app)
-                    if gender_info['total_faces'] > 0:
-                        current_prompt = enhance_prompt_with_gender(
-                            current_prompt, gender_info, strength=gender_strength
-                        )
-                        gender_neg = get_gender_negative_prompt(
-                            gender_info, strength=gender_strength * 1.3
-                        )
-                        current_negative = merge_negative_prompts(current_negative, gender_neg)
-                except Exception as e:
-                    print(f"  Gender preservation error (img {i}): {e}")
-            
             batch_prompts.append(current_prompt)
             batch_negatives.append(current_negative)
 
@@ -312,144 +259,55 @@ def create_batch_processor_func(
 
         results = []
 
-        # Apply PuLID patching for the batch if enabled
-        pulid_patch = None
-        if enable_multi_character and character_embeddings:
-            try:
-                from src.image.pulid_helper import PuLIDFluxPatch
-                # character_embeddings should be a list of embeddings
-                # PuLIDFluxPatch handles the list
-                pulid_patch = PuLIDFluxPatch(pipe.transformer, character_embeddings)
-                pulid_patch.patch()
-                print(f"  [PuLID] Patched batch with {len(character_embeddings)} character(s)")
-            except Exception as e:
-                print(f"  Warning: PuLID patching failed for batch: {e}")
-
         try:
             with torch.inference_mode(), autocast_context:
-                # Handle ControlNet / Pose
-                if enable_pose_preservation and cn_pipe is not None and extractor is not None:
-                    batch_poses = []
-                    for i, img in enumerate(resized_images):
-                        w, h = target_sizes[i]
-                        pose_img = extractor.extract_pose(
-                            img,
-                            mode=extraction_mode,
-                            detect_resolution=512,
-                            image_resolution=max(int(h), int(w))
-                        )
-                        batch_poses.append(pose_img if pose_img is not None else img) # Fallback? 
-
-                    # Flux pipeline with ControlNet usually expects corresponding lists
-                    # Note: We must ensure all images in batch have same size for stacking 
-                    # OR the pipeline handles list of images with different sizes (unlikely for efficient batching)
-                    # For max efficiency, we force same size if batching is enabled, 
-                    # but here we might have variable sizes. 
-                    # If sizes differ, we CANNOT batch efficiently in one forward pass without padding.
-                    # For now, let's assume they are roughly same or process supports it. 
-                    # Actually, standard Diffusers pipelines generally require same-size batching.
-                    
-                    # Check sizes
-                    first_size = target_sizes[0]
-                    all_same_size = all(s == first_size for s in target_sizes)
-                    
-                    if all_same_size:
-                        # True Batch
-                        kwargs = build_safe_kwargs(
-                            cn_pipe,
-                            prompt=batch_prompts,
-                            negative_prompt=batch_negatives,
-                            control_image=batch_poses,
-                            image=resized_images if "img2img" in str(type(cn_pipe)).lower() else None,
-                            height=first_size[1],
-                            width=first_size[0],
-                            num_inference_steps=int(steps),
-                            guidance_scale=final_guidance,
-                            controlnet_conditioning_scale=float(controlnet_strength),
-                            generator=generators,
-                            num_images_per_prompt=1,
-                        )
-                        print(f"  Running batch inference (ControlNet): {len(batch_prompts)} prompts...")
-                        batch_results = cn_pipe(**kwargs).images
-                        print(f"  Inference complete. Got {len(batch_results)} images.")
-                        results = batch_results
-                    else:
-                        # Fallback to serial for this batch if sizes differ
-                        # (This shouldn't happen if dynamic batcher groups by aspect ratio, but we don't have that yet)
-                        print("  Warning: Batch images have different sizes. Processing serially.")
-                        for i in range(batch_size):
-                            kwargs = build_safe_kwargs(
-                                cn_pipe,
-                                prompt=batch_prompts[i],
-                                negative_prompt=batch_negatives[i],
-                                control_image=batch_poses[i],
-                                height=target_sizes[i][1],
-                                width=target_sizes[i][0],
-                                num_inference_steps=int(steps),
-                                guidance_scale=final_guidance,
-                                controlnet_conditioning_scale=float(controlnet_strength),
-                                generator=generators[i],
-                                num_images_per_prompt=1,
-                            )
-                            res = cn_pipe(**kwargs).images[0]
-                            results.append(res)
+                # Check sizes
+                first_size = target_sizes[0]
+                all_same_size = all(s == first_size for s in target_sizes)
+                
+                if all_same_size:
+                    kwargs = build_safe_kwargs(
+                        pipe,
+                        prompt=batch_prompts,
+                        negative_prompt=batch_negatives,
+                        image=resized_images,
+                        strength=float(img2img_strength),
+                        height=first_size[1],
+                        width=first_size[0],
+                        num_inference_steps=int(steps),
+                        guidance_scale=final_guidance,
+                        generator=generators,
+                        num_images_per_prompt=1,
+                    )
+                    print(f"  Running batch inference: {len(batch_prompts)} prompts...")
+                    batch_results = pipe(**kwargs).images
+                    print(f"  Inference complete. Got {len(batch_results)} images.")
+                    results = batch_results
                 else:
-                    # Standard Img2Img / Txt2Img
-                    # Check sizes
-                    first_size = target_sizes[0]
-                    all_same_size = all(s == first_size for s in target_sizes)
-
-                    if all_same_size:
+                    # Fallback to serial for this batch if sizes differ
+                    print("  Warning: Batch images have different sizes. Processing serially.")
+                    for i in range(batch_size):
                         kwargs = build_safe_kwargs(
                             pipe,
-                            prompt=batch_prompts,
-                            negative_prompt=batch_negatives,
-                            image=resized_images,
+                            prompt=batch_prompts[i],
+                            negative_prompt=batch_negatives[i],
+                            image=resized_images[i],
                             strength=float(img2img_strength),
-                            height=first_size[1],
-                            width=first_size[0],
+                            height=target_sizes[i][1],
+                            width=target_sizes[i][0],
                             num_inference_steps=int(steps),
                             guidance_scale=final_guidance,
-                            generator=generators,
+                            generator=generators[i],
                             num_images_per_prompt=1,
                         )
-                        print(f"  Running batch inference: {len(batch_prompts)} prompts...")
-                        batch_results = pipe(**kwargs).images
-                        print(f"  Inference complete. Got {len(batch_results)} images.")
-                        results = batch_results
-                    else:
-                         print("  Warning: Batch images have different sizes. Processing serially.")
-                         for i in range(batch_size):
-                            kwargs = build_safe_kwargs(
-                                pipe,
-                                prompt=batch_prompts[i],
-                                negative_prompt=batch_negatives[i],
-                                image=resized_images[i],
-                                strength=float(img2img_strength),
-                                height=target_sizes[i][1],
-                                width=target_sizes[i][0],
-                                num_inference_steps=int(steps),
-                                guidance_scale=final_guidance,
-                                generator=generators[i],
-                                num_images_per_prompt=1,
-                            )
-                            res = pipe(**kwargs).images[0]
-                            results.append(res)
+                        res = pipe(**kwargs).images[0]
+                        results.append(res)
 
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                raise e # Propagate to dynamic sizer
+                raise e
             print(f"  Batch inference error: {e}")
-            return [] # Fail batch
-
-        finally:
-            # Unpatch PuLID after the batch is finished
-            if pulid_patch:
-                try:
-                    pulid_patch.unpatch()
-                    print("  [PuLID] Unpatched batch")
-                except Exception as e:
-                    print(f"  Warning: PuLID unpatching failed for batch: {e}")
+            return []
 
         # 5. Post-processing & Saving
         final_results = []
@@ -461,24 +319,6 @@ def create_batch_processor_func(
         for i in range(process_limit):
             res = results[i]
             path = paths[i]
-            
-            # Face Swap
-            if enable_faceswap and faceswap_source_image is not None:
-                try:
-                    from src.image.faceswap_helper import get_faceswap_helper
-                    swapper = get_faceswap_helper(device=device)
-                    if not swapper.is_loaded:
-                        swapper.load_models()
-                    res = swapper.swap_face(
-                        target_image=res,
-                        source_image=faceswap_source_image,
-                        face_index=int(faceswap_target_index),
-                        use_similarity=True,
-                        similarity_threshold=0.6
-                    )
-                except Exception as e:
-                    print(f"  Warning: Face swap failed for {path}: {e}")
-
             final_results.append(res)
             
             # Save

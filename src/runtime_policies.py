@@ -42,7 +42,7 @@ def is_distilled_model(model_name: Optional[str]) -> bool:
 
 def is_sdnq_or_quantized(model_key: Optional[str], pipe: Optional[Any] = None) -> bool:
     value = str(model_key or "").lower()
-    if any(tag in value for tag in ["sdnq", "zimage-quant", "int8", "quantized"]):
+    if any(tag in value for tag in ["sdnq", "zimage-quant", "int8", "quantized", "flux2-klein-int8"]):
         return True
 
     if pipe is None:

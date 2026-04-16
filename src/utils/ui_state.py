@@ -25,30 +25,16 @@ class UIState:
     enable_klein_anatomy_fix: bool = False
     device: str = "cuda"
     lora_file: Optional[str] = None
+    builtin_lora: Optional[str] = None
     lora_strength: float = 1.0
-    enable_multi_character: bool = False
-    character_input_folder: str = ""
-    character_description: str = ""
-    enable_faceswap: bool = False
-    faceswap_target_index: int = 0
     optimization_profile: str = "balanced"
     enable_windows_compile_probe: bool = False
     enable_cuda_graphs: bool = False
     enable_optional_accelerators: bool = False
-    enable_pose_preservation: bool = False
-    pose_detector_type: str = "dwpose"
-    pose_mode: str = "Body + Face"
-    controlnet_strength: float = 0.7
-    show_pose_skeleton: bool = False
-    enable_gender_preservation: bool = True
-    gender_strength: float = 1.0
-    enable_prompt_upsampling: bool = False
     video_output_path: str = ""
     preserve_audio: bool = True
     video_resolution_preset: str = "~1024px"
     input_image_names: List[str] = field(default_factory=list)
-    faceswap_source_names: List[str] = field(default_factory=list)
-    character_reference_names: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -71,30 +57,16 @@ class UIState:
             "enable_klein_anatomy_fix": self.enable_klein_anatomy_fix,
             "device": self.device,
             "lora_file": self.lora_file,
+            "builtin_lora": self.builtin_lora,
             "lora_strength": self.lora_strength,
-            "enable_multi_character": self.enable_multi_character,
-            "character_input_folder": self.character_input_folder,
-            "character_description": self.character_description,
-            "enable_faceswap": self.enable_faceswap,
-            "faceswap_target_index": self.faceswap_target_index,
             "optimization_profile": self.optimization_profile,
             "enable_windows_compile_probe": self.enable_windows_compile_probe,
             "enable_cuda_graphs": self.enable_cuda_graphs,
             "enable_optional_accelerators": self.enable_optional_accelerators,
-            "enable_pose_preservation": self.enable_pose_preservation,
-            "pose_detector_type": self.pose_detector_type,
-            "pose_mode": self.pose_mode,
-            "controlnet_strength": self.controlnet_strength,
-            "show_pose_skeleton": self.show_pose_skeleton,
-            "enable_gender_preservation": self.enable_gender_preservation,
-            "gender_strength": self.gender_strength,
-            "enable_prompt_upsampling": self.enable_prompt_upsampling,
             "video_output_path": self.video_output_path,
             "preserve_audio": self.preserve_audio,
             "video_resolution_preset": self.video_resolution_preset,
             "input_image_names": self.input_image_names,
-            "faceswap_source_names": self.faceswap_source_names,
-            "character_reference_names": self.character_reference_names,
         }
 
     @classmethod
@@ -119,30 +91,16 @@ class UIState:
             enable_klein_anatomy_fix=data.get("enable_klein_anatomy_fix", False),
             device=data.get("device", "cuda"),
             lora_file=data.get("lora_file", None),
+            builtin_lora=data.get("builtin_lora", None),
             lora_strength=data.get("lora_strength", 1.0),
-            enable_multi_character=data.get("enable_multi_character", False),
-            character_input_folder=data.get("character_input_folder", ""),
-            character_description=data.get("character_description", ""),
-            enable_faceswap=data.get("enable_faceswap", False),
-            faceswap_target_index=data.get("faceswap_target_index", 0),
             optimization_profile=data.get("optimization_profile", "balanced"),
             enable_windows_compile_probe=data.get("enable_windows_compile_probe", False),
             enable_cuda_graphs=data.get("enable_cuda_graphs", False),
             enable_optional_accelerators=data.get("enable_optional_accelerators", False),
-            enable_pose_preservation=data.get("enable_pose_preservation", False),
-            pose_detector_type=data.get("pose_detector_type", "dwpose"),
-            pose_mode=data.get("pose_mode", "Body + Face"),
-            controlnet_strength=data.get("controlnet_strength", 0.7),
-            show_pose_skeleton=data.get("show_pose_skeleton", False),
-            enable_gender_preservation=data.get("enable_gender_preservation", True),
-            gender_strength=data.get("gender_strength", 1.0),
-            enable_prompt_upsampling=data.get("enable_prompt_upsampling", False),
             video_output_path=data.get("video_output_path", ""),
             preserve_audio=data.get("preserve_audio", True),
             video_resolution_preset=data.get("video_resolution_preset", "~1024px"),
             input_image_names=data.get("input_image_names", []),
-            faceswap_source_names=data.get("faceswap_source_names", []),
-            character_reference_names=data.get("character_reference_names", []),
         )
 
     @classmethod

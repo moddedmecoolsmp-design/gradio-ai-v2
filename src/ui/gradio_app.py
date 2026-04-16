@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+from src.constants import BUILTIN_LORA_CHOICES
+
+def on_builtin_lora_change(builtin_lora):
+    """Toggle file upload visibility based on built-in LoRA selection."""
+    if builtin_lora == "None (Custom File Upload)":
+        return gr.update(visible=True), None  # Show file upload, clear lora_file
+    else:
+        return gr.update(visible=False), None  # Hide file upload, clear lora_file
 
 def create_ui(context: Mapping[str, Any]):
     module_globals = globals()
@@ -64,12 +72,6 @@ def create_ui(context: Mapping[str, Any]):
                     value=initial_state["preset_choice"],
                     label="Anime -> Photoreal Preset",
                     info="Sets prompt, negative prompt, strength, and steps",
-                )
-    
-                enable_prompt_upsampling = gr.Checkbox(
-                    label="Prompt Upsampling (Florence-2 + OCR)",
-                    value=initial_state.get("enable_prompt_upsampling", False),
-                    info="Uses the first input image to add a detailed caption and OCR text to your prompt",
                 )
     
                 main_tabs = gr.Tabs()
@@ -237,206 +239,7 @@ def create_ui(context: Mapping[str, Any]):
                                 info="1.0 recommended. Higher = stricter prompt following.",
                             )
     
-                    with gr.Accordion("Identity & Preservation", open=False):
-                        with gr.Accordion("Multi-Character Consistency (PuLID)", open=False) as pulid_accordion:
-                            gr.Markdown("Detect and track multiple characters for consistent identity.")
-                            with gr.Accordion("Details", open=False):
-                                gr.Markdown("""
-                                **Workflow:**
-                                1. Select input images folder (where manga panels are located)
-                                2. Click "Detect Characters" to scan for all unique faces
-                                3. For each detected character, optionally upload a reference image
-                                4. Characters without references will be ignored during generation
-    
-                                **Note:** Full PuLID requires ~3-4GB VRAM. Use with FLUX.2-klein-4B SDNQ for 8GB cards.
-                                """)
-    
-                            with gr.Row():
-                                enable_multi_character = gr.Checkbox(
-                                    label="Enable Multi-Character Mode",
-                                    value=initial_state.get("enable_multi_character", False),
-                                    info="Detect and track multiple characters for consistency",
-                                )
-    
-                            with gr.Row():
-                                character_input_folder = gr.Textbox(
-                                    label="Input Folder Path",
-                                    placeholder="C:/path/to/manga/panels",
-                                    value=initial_state.get("character_input_folder", ""),
-                                    info="Folder containing input images to scan for characters",
-                                )
-                                character_input_browse = gr.Button("Browse", scale=0, min_width=100)
-    
-                            with gr.Row():
-                                detect_characters_btn = gr.Button("Detect Characters", variant="primary")
-    
-                            character_detection_status = gr.Textbox(
-                                label="Detection Status",
-                                interactive=False,
-                                lines=2,
-                            )
-    
-                            character_gallery = gr.State([])
-    
-                            with gr.Column(visible=initial_state.get("enable_multi_character", False)) as character_assignment_ui:
-                                gr.Markdown("### Detected Characters")
-                                gr.Markdown("Upload reference images for each character you want to keep consistent:")
-    
-                                character_slots = []
-                                persisted_refs = initial_state.get("character_references", [None]*10)
-                                for i in range(10):
-                                    is_visible = persisted_refs[i] is not None
-                                    with gr.Row(visible=is_visible) as char_row:
-                                        char_detected_face = gr.Image(
-                                            label=f"Character {i+1} (Detected)",
-                                            type="pil",
-                                            height=150,
-                                            interactive=False,
-                                        )
-                                        char_reference_upload = gr.Image(
-                                            label="Reference Image (Optional - Upload to enable consistency)",
-                                            type="pil",
-                                            value=persisted_refs[i],
-                                            height=150,
-                                        )
-                                        char_info = gr.Textbox(
-                                            label="Info",
-                                            value=f"ID: char_{i}\n(Persisted Reference)" if is_visible else "",
-                                            interactive=False,
-                                            lines=2,
-                                        )
-    
-                                    character_slots.append({
-                                        'row': char_row,
-                                        'detected_face': char_detected_face,
-                                        'reference_upload': char_reference_upload,
-                                        'info': char_info,
-                                    })
-    
-                            with gr.Column(visible=not initial_state.get("enable_multi_character", False)) as simple_mode_ui:
-                                character_description = gr.Textbox(
-                                    label="Character Description (Simple Mode)",
-                                    placeholder="e.g., young woman with long black hair, blue eyes, athletic build",
-                                    value=initial_state.get("character_description", ""),
-                                    info="Text-based fallback (lower quality than PuLID)",
-                                    lines=2,
-                                )
-    
-                        with gr.Accordion("Face Swap (Post-Processing)", open=False):
-                            gr.Markdown("Replace faces in the generated image with reference faces.")
-                            with gr.Accordion("Details", open=False):
-                                gr.Markdown("""
-                                **Use cases:** Consistent character identity, manga character face swapping
-                                **Note:** Requires ~2GB VRAM. Works best after FLUX generation completes.
-                                """)
-    
-                            enable_faceswap = gr.Checkbox(
-                                label="Enable Face Swap",
-                                value=initial_state.get("enable_faceswap", False),
-                                info="Apply face swapping after image generation",
-                            )
-    
-                            faceswap_source_image = gr.Image(
-                                label="Source Face Image (The face to swap into the generated image)",
-                                type="pil",
-                                value=initial_state.get("faceswap_source_image"),
-                                height=200,
-                            )
-    
-                            faceswap_target_index = gr.Slider(
-                                minimum=0,
-                                maximum=5,
-                                value=initial_state.get("faceswap_target_index", 0),
-                                step=1,
-                                label="Target Face Index",
-                                info="Which face in generated image to swap (0 = largest face)",
-                            )
-    
-                        with gr.Accordion("Pose & Expression Preservation (ControlNet)", open=False) as pose_accordion:
-                            gr.Markdown("Preserve character poses and facial expressions from input images.")
-                            with gr.Accordion("Details", open=False):
-                                gr.Markdown("""
-                                Uses DWPose/OpenPose to extract pose skeletons with facial landmarks, then conditions
-                                generation via FLUX ControlNet Union.
-    
-                                **Requirements:**
-                                - FLUX model (ControlNet not supported on Z-Image)
-                                - Input image with visible character pose
-                                - ~2-3GB additional VRAM for ControlNet
-                                """)
-    
-                            with gr.Row():
-                                enable_pose_preservation = gr.Checkbox(
-                                    label="Enable Pose & Expression Preservation",
-                                    value=initial_state.get("enable_pose_preservation", False),
-                                    info="Extract and preserve pose skeleton + facial landmarks",
-                                )
-    
-                                pose_detector_type = gr.Radio(
-                                    choices=["dwpose", "openpose"],
-                                    value=initial_state.get("pose_detector_type", "dwpose"),
-                                    label="Pose Detector",
-                                    info="DWPose is more accurate for facial expressions",
-                                )
-    
-                                pose_mode = gr.Radio(
-                                    choices=["Body Only", "Body + Face", "Body + Face + Hands"],
-                                    value=initial_state.get("pose_mode", "Body + Face"),
-                                    label="Pose Detection Mode",
-                                    info="Face mode includes 70 facial landmarks for expressions",
-                                )
-    
-                            with gr.Row():
-                                controlnet_strength = gr.Slider(
-                                    0.0, 1.0, value=initial_state.get("controlnet_strength", 0.7), step=0.05,
-                                    label="Pose Control Strength",
-                                    info="Higher = stricter pose matching (0.7 recommended)",
-                                )
-    
-                                show_pose_skeleton = gr.Checkbox(
-                                    label="Show Extracted Pose Skeleton",
-                                    value=initial_state.get("show_pose_skeleton", False),
-                                    info="Display the pose keypoints used for conditioning",
-                                )
-    
-                        with gr.Accordion("Gender Preservation", open=False):
-                            gr.Markdown("Automatically detect and preserve character genders from input images.")
-                            with gr.Accordion("Details", open=False):
-                                gr.Markdown("""
-                                Uses InsightFace to detect faces and their genders, then adds gender-specific
-                                keywords to prompts and negative prompts to prevent gender flipping during generation.
-                                """)
-    
-                            with gr.Row():
-                                enable_gender_preservation = gr.Checkbox(
-                                    label="Enable Gender Preservation",
-                                    value=initial_state.get("enable_gender_preservation", True),
-                                    info="Detect and preserve character genders from input",
-                                )
-    
-                                gender_strength = gr.Slider(
-                                    label="Preservation Strength",
-                                    minimum=0.5,
-                                    maximum=2.0,
-                                    value=initial_state.get("gender_strength", 1.0),
-                                    step=0.1,
-                                    info="Higher = stronger gender enforcement",
-                                )
-    
-                            gender_detection_info = gr.Textbox(
-                                label="Detected Genders",
-                                interactive=False,
-                                lines=1,
-                                placeholder="Upload an input image to detect genders",
-                            )
-    
-                            gender_visualization = gr.Image(
-                                label="Detection Visualization",
-                                type="pil",
-                                interactive=False,
-                                visible=False,
-                            )
-    
+
                     with gr.Accordion("Performance & LoRA", open=False):
                         optimization_profile = gr.Dropdown(
                             choices=["max_speed", "balanced", "stability"],
@@ -466,9 +269,16 @@ def create_ui(context: Mapping[str, Any]):
                         )
     
                         lora_label = gr.Markdown("### LoRA Settings", visible=False)
+                        builtin_lora = gr.Dropdown(
+                            choices=[choice[0] for choice in BUILTIN_LORA_CHOICES],
+                            value=initial_state.get("builtin_lora", "None (Custom File Upload)"),
+                            label="Built-in LoRA",
+                            info="Select a built-in LoRA or choose 'None' to upload your own",
+                            visible=False,
+                        )
                         with gr.Row():
                             lora_file = gr.File(
-                                label="LoRA File",
+                                label="LoRA File (Custom Upload)",
                                 file_types=[".safetensors"],
                                 file_count="single",
                                 type="filepath",
@@ -493,12 +303,6 @@ def create_ui(context: Mapping[str, Any]):
     
             with gr.Column(scale=1):
                 output_image = gr.Image(label="Generated Image", type="pil", format="png")
-                pose_skeleton_output = gr.Image(
-                    label="Extracted Pose Skeleton (for reference)",
-                    type="pil",
-                    visible=True,
-                    interactive=False,
-                )
         persisted_state = gr.State(initial_state)
     
         # Examples
@@ -540,6 +344,7 @@ def create_ui(context: Mapping[str, Any]):
                 resolution_preset,
                 img2img_strength,
                 lora_label,
+                builtin_lora,
                 lora_file,
                 lora_strength,
                 clear_lora_btn,
@@ -550,8 +355,6 @@ def create_ui(context: Mapping[str, Any]):
                 batch_resolution_preset,
                 video_resolution_preset,
                 batch_tab,
-                pulid_accordion,
-                pose_accordion,
             ],
         )
     
@@ -564,6 +367,7 @@ def create_ui(context: Mapping[str, Any]):
                 resolution_preset,
                 img2img_strength,
                 lora_label,
+                builtin_lora,
                 lora_file,
                 lora_strength,
                 clear_lora_btn,
@@ -574,8 +378,6 @@ def create_ui(context: Mapping[str, Any]):
                 batch_resolution_preset,
                 video_resolution_preset,
                 batch_tab,
-                pulid_accordion,
-                pose_accordion,
             ],
         )
         
@@ -584,19 +386,7 @@ def create_ui(context: Mapping[str, Any]):
             inputs=[input_images, resolution_preset, downscale_factor],
             outputs=[width, height, resolution_preset, single_downscale_preview],
         )
-    
-        # Gender detection display update
-        input_images.change(
-            fn=detect_gender_for_display,
-            inputs=[input_images, enable_gender_preservation],
-            outputs=[gender_detection_info, gender_visualization],
-        )
-        enable_gender_preservation.change(
-            fn=detect_gender_for_display,
-            inputs=[input_images, enable_gender_preservation],
-            outputs=[gender_detection_info, gender_visualization],
-        )
-    
+
         resolution_preset.change(
             fn=on_resolution_preset_change,
             inputs=[resolution_preset, input_images, downscale_factor],
@@ -617,8 +407,8 @@ def create_ui(context: Mapping[str, Any]):
         
         preset_choice.change(
             fn=apply_prompt_preset,
-            inputs=[preset_choice, prompt, negative_prompt, img2img_strength, steps, lora_file, lora_strength, guidance_scale],
-            outputs=[prompt, negative_prompt, img2img_strength, steps, lora_file, lora_strength, guidance_scale],
+            inputs=[preset_choice, prompt, negative_prompt, img2img_strength, steps, lora_file, builtin_lora, lora_strength, guidance_scale],
+            outputs=[prompt, negative_prompt, img2img_strength, steps, lora_file, builtin_lora, lora_strength, guidance_scale],
         )
     
         persistence_inputs = [
@@ -641,29 +431,15 @@ def create_ui(context: Mapping[str, Any]):
             enable_klein_anatomy_fix,
             device,
             lora_file,
+            builtin_lora,
             lora_strength,
-            enable_multi_character,
-            character_input_folder,
-            character_description,
-            enable_faceswap,
-            faceswap_source_image,
-            faceswap_target_index,
             optimization_profile,
             enable_windows_compile_probe,
             enable_cuda_graphs,
             enable_optional_accelerators,
-            enable_pose_preservation,
-            pose_detector_type,
-            pose_mode,
-            controlnet_strength,
-            show_pose_skeleton,
-            enable_gender_preservation,
-            gender_strength,
-            enable_prompt_upsampling,
             video_output_path,
             preserve_audio,
             video_resolution_preset,
-            *[slot['reference_upload'] for slot in character_slots]
         ]
         persistence_outputs = [persisted_state]
     
@@ -686,47 +462,20 @@ def create_ui(context: Mapping[str, Any]):
             guidance_scale,
             device,
             lora_file,
+            builtin_lora,
             lora_strength,
-            enable_multi_character,
-            character_input_folder,
-            character_description,
-            enable_faceswap,
-            faceswap_source_image,
-            faceswap_target_index,
             optimization_profile,
             enable_windows_compile_probe,
             enable_optional_accelerators,
-            enable_pose_preservation,
-            pose_detector_type,
-            pose_mode,
-            controlnet_strength,
-            show_pose_skeleton,
-            enable_gender_preservation,
-            gender_strength,
-            enable_prompt_upsampling,
             enable_klein_anatomy_fix,
             video_output_path,
             preserve_audio,
-            *[slot['reference_upload'] for slot in character_slots]
         ]:
             component.change(
                 fn=persist_ui_state,
                 inputs=persistence_inputs,
                 outputs=persistence_outputs,
             )
-    
-        # Multi-Character toggle visibility handler
-        enable_multi_character.change(
-            fn=lambda x: (gr.update(visible=x), gr.update(visible=not x)),
-            inputs=[enable_multi_character],
-            outputs=[character_assignment_ui, simple_mode_ui]
-        )
-    
-        character_input_browse.click(
-            fn=select_folder,
-            inputs=[character_input_folder],
-            outputs=[character_input_folder],
-        )
     
         batch_input_browse.click(
             fn=select_folder,
@@ -765,36 +514,17 @@ def create_ui(context: Mapping[str, Any]):
         )
     
         # Character detection button handler
-        detect_characters_btn.click(
-            fn=detect_characters_handler,
-            inputs=[character_input_folder, device],
-            outputs=[
-                character_detection_status,
-                character_gallery,
-                character_assignment_ui,
-                simple_mode_ui,
-                *[comp for slot in character_slots for comp in [slot['row'], slot['detected_face'], slot['reference_upload'], slot['info']]]
-            ],
-            show_progress=True
-        )
-    
+
         generate_btn.click(
             fn=generate_image,
             inputs=[
                 prompt, negative_prompt, height, width, steps, seed, guidance_scale,
-                device, model_choice, input_images, downscale_factor, img2img_strength, lora_file, lora_strength,
-                enable_multi_character, character_input_folder, character_description,
-                enable_faceswap, faceswap_source_image, faceswap_target_index,
+                device, model_choice, input_images, downscale_factor, img2img_strength, lora_file, builtin_lora, lora_strength,
                 optimization_profile, enable_windows_compile_probe, enable_cuda_graphs, enable_optional_accelerators,
-                enable_pose_preservation, pose_detector_type, pose_mode, controlnet_strength, show_pose_skeleton,
-                enable_gender_preservation,
                 preset_choice,
-                gender_strength,
-                enable_prompt_upsampling,
                 enable_klein_anatomy_fix,
-                *[slot['reference_upload'] for slot in character_slots]
             ],
-            outputs=[output_image, seed_info, pose_skeleton_output],
+            outputs=[output_image, seed_info],
             show_progress=True,  # Enable progress tracking for model downloads
         )
     
@@ -809,16 +539,10 @@ def create_ui(context: Mapping[str, Any]):
             inputs=[
                 prompt, negative_prompt, batch_input_folder, batch_output_folder, batch_resolution_preset, downscale_factor,
                 height, width, steps, seed, guidance_scale, device, model_choice,
-                lora_file, lora_strength,
-                enable_multi_character, character_input_folder, character_description,
-                enable_faceswap, faceswap_source_image, faceswap_target_index,
+                lora_file, builtin_lora, lora_strength,
                 optimization_profile, enable_windows_compile_probe, enable_cuda_graphs, enable_optional_accelerators,
-                enable_pose_preservation, pose_detector_type, pose_mode, controlnet_strength,
-                enable_gender_preservation, gender_strength,
-                enable_prompt_upsampling,
                 enable_klein_anatomy_fix,
                 preset_choice,
-                *[slot['reference_upload'] for slot in character_slots]
             ],
             outputs=[batch_summary],
             show_progress=True,
@@ -840,22 +564,23 @@ def create_ui(context: Mapping[str, Any]):
             inputs=[lora_strength],
             outputs=[seed_info],
         )
-    
+
+        builtin_lora.change(
+            fn=on_builtin_lora_change,
+            inputs=[builtin_lora],
+            outputs=[lora_file, lora_file],
+        )
+
         video_run_btn.click(
             fn=process_video,
             inputs=[
                 prompt, negative_prompt, video_input, preserve_audio, video_output_path,
                 video_resolution_preset, img2img_strength,
                 height, width, steps, seed, guidance_scale, device, model_choice,
-                lora_file, lora_strength,
-                enable_multi_character, character_input_folder, character_description,
-                enable_faceswap, faceswap_source_image, faceswap_target_index,
+                lora_file, builtin_lora, lora_strength,
                 optimization_profile, enable_windows_compile_probe, enable_cuda_graphs, enable_optional_accelerators,
-                enable_pose_preservation, pose_detector_type, pose_mode, controlnet_strength,
-                enable_gender_preservation, gender_strength,
                 enable_klein_anatomy_fix,
                 preset_choice,
-                *[slot['reference_upload'] for slot in character_slots]
             ],
             outputs=[video_summary, video_output],
             show_progress=True,

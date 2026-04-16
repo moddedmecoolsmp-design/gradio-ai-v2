@@ -869,8 +869,6 @@ class PipelineManager:
     ) -> bool:
         if device != "cuda":
             return False
-        if not enable_pose_preservation:
-            return False
         if not is_flux_model(model_key):
             return False
         # Quantized models (SDNQ 4-bit, int8) are small enough to fit in GPU
@@ -897,8 +895,9 @@ class PipelineManager:
         print(f"Loading FLUX.2-klein-4B (int8 quantized) on {device}...")
         model_path = snapshot_download("aydin99/FLUX.2-klein-4B-int8")
 
+        dtype = torch.bfloat16 if device in ["cuda", "mps"] else torch.float32
         qtransformer = QuantizedFlux2Transformer2DModel.from_pretrained(model_path)
-        qtransformer.to(device=device)
+        qtransformer.to(device=device, dtype=dtype)
 
         config = AutoConfig.from_pretrained(f"{model_path}/text_encoder", trust_remote_code=True)
         with init_empty_weights():
@@ -909,13 +908,12 @@ class PipelineManager:
         state_dict = load_file(f"{model_path}/text_encoder/model.safetensors")
         requantize(text_encoder, state_dict=state_dict, quantization_map=qmap)
         text_encoder.eval()
-        text_encoder.to(device=device)
+        text_encoder.to(device=device, dtype=dtype)
 
         tokenizer = self._wrap_flux2_chat_template_tokenizer(
             AutoTokenizer.from_pretrained(f"{model_path}/tokenizer")
         )
 
-        dtype = torch.bfloat16 if device in ["cuda", "mps"] else torch.float32
         vae = self.get_flux2_small_decoder_vae(dtype)
         Flux2PipelineClass = self.get_flux2_pipeline_class()
         pipe_kwargs = {
@@ -1349,3 +1347,43 @@ class PipelineManager:
             self.download_file(self.zimage_realistic_lora_url, self.zimage_realistic_lora_path, "Realistic Snapshot LoRA (Z-Image)", progress)
         if kwargs.get("enable_flux_anime2real_lora") and not os.path.exists(self.flux_anime2real_lora_path):
             self.download_file(self.flux_anime2real_lora_url, self.flux_anime2real_lora_path, "Ultra Real Amateur Selfies LoRA (FLUX 4B)", progress)
+
+    def resolve_builtin_lora_path(self, builtin_lora_key: str) -> Optional[str]:
+        """Resolve a built-in LoRA key to its file path."""
+        if builtin_lora_key is None or builtin_lora_key == "":
+            return None
+
+        path_map = {
+            "klein_anatomy": self.klein_anatomy_lora_path,
+            "zimage_realistic": self.zimage_realistic_lora_path,
+            "flux_anime2real": self.flux_anime2real_lora_path,
+        }
+        return path_map.get(builtin_lora_key)
+
+    def ensure_builtin_lora_downloaded(self, builtin_lora_key: str, progress=None) -> Optional[str]:
+        """Ensure a built-in LoRA is downloaded and return its path."""
+        if builtin_lora_key is None or builtin_lora_key == "":
+            return None
+
+        path_map = {
+            "klein_anatomy": (self.klein_anatomy_lora_path, self.klein_anatomy_lora_url, "Klein Anatomy Fix"),
+            "zimage_realistic": (self.zimage_realistic_lora_path, self.zimage_realistic_lora_url, "Realistic Snapshot LoRA (Z-Image)"),
+            "flux_anime2real": (self.flux_anime2real_lora_path, self.flux_anime2real_lora_url, "Ultra Real Amateur Selfies LoRA (FLUX 4B)"),
+        }
+
+        if builtin_lora_key not in path_map:
+            print(f"Warning: Unknown built-in LoRA key: {builtin_lora_key}")
+            return None
+
+        lora_path, lora_url, description = path_map[builtin_lora_key]
+
+        if not os.path.exists(lora_path):
+            print(f"Downloading built-in LoRA: {description}")
+            try:
+                self.download_file(lora_url, lora_path, description, progress)
+                print(f"  Downloaded: {os.path.basename(lora_path)}")
+            except Exception as e:
+                print(f"  Error downloading LoRA: {e}")
+                return None
+
+        return lora_path if os.path.exists(lora_path) else None

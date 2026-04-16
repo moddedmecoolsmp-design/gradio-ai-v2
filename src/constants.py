@@ -13,6 +13,14 @@ GRADIO_DELETE_CACHE = 7200  # 2 hours in seconds
 # Klein Anatomy LoRA
 KLEIN_ANATOMY_LORA_URL = "https://civitai.com/api/download/models/2324991"
 
+# Built-in LoRAs for dropdown selection
+BUILTIN_LORA_CHOICES = [
+    ("None (Custom File Upload)", None),
+    ("Klein Anatomy Fix", "klein_anatomy"),
+    ("Realistic Snapshot v5 (Z-Image)", "zimage_realistic"),
+    ("Ultra Real Amateur Selfies (FLUX 4B)", "flux_anime2real"),
+]
+
 # Pose modes
 POSE_MODES = ["Body Only", "Body + Face", "Body + Face + Hands"]
 POSE_DETECTOR_TYPES = ["dwpose", "openpose"]
