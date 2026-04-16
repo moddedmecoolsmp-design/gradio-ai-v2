@@ -539,6 +539,8 @@ class PipelineManager:
 
     def _compile_vae_decoder(self, pipe, device: str, parent_key: str) -> None:
         """Compile the VAE decoder for faster latent-to-pixel decode."""
+        if device != "cuda" or not torch.cuda.is_available():
+            return
         vae = getattr(pipe, "vae", None)
         if vae is None:
             return
