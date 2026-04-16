@@ -180,6 +180,10 @@ class PuLIDHelper:
         if self.eva_clip: del self.eva_clip; self.eva_clip = None
         if self.pulid_encoder: del self.pulid_encoder; self.pulid_encoder = None
         self.is_loaded = False
+        with _pulid_cache_lock:
+            # Evict from cache so the next get_pulid_helper() creates a fresh instance.
+            key = f"{self.device}_{self.enable_fp8}"
+            _pulid_cache.pop(key, None)
         if torch.cuda.is_available(): torch.cuda.empty_cache()
 
 def get_pulid_helper(device="cuda", enable_fp8=True):

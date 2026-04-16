@@ -159,6 +159,9 @@ class FaceSwapHelper:
         # We only null the reference to face_app, as it might be shared
         self.face_app = None
         self.is_loaded = False
+        with _faceswap_lock:
+            # Evict from cache so the next get_faceswap_helper() creates a fresh instance.
+            _faceswap_cache.pop(self.device, None)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
