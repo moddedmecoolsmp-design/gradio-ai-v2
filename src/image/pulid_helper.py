@@ -401,7 +401,13 @@ class PuLIDFluxPatch:
         self.original_forward_methods = {}
 
     def patch(self):
-        """Hijack the forward method of transformer blocks."""
+        """Hijack the forward method of transformer blocks.
+
+        Refuses to patch if the transformer is already patched by another
+        PuLIDFluxPatch instance, to avoid silently dropping this instance's
+        embeddings or corrupting the restore chain. Callers must unpatch the
+        previous instance first.
+        """
         import types
 
         # We need to inject into both FluxTransformerBlock and FluxSingleTransformerBlock
@@ -414,6 +420,12 @@ class PuLIDFluxPatch:
 
         # For now, we concatenate all embeddings
         if not self.embeddings:
+            return
+
+        # Refuse to layer on top of another active patch — it would silently
+        # stack embeddings or leave stale `_original_forward` refs after unpatch.
+        if getattr(self.transformer, "_pulid_patch_owner", None) is not None:
+            print("  Warning: transformer already has an active PuLID patch; skipping.")
             return
 
         # [N, 1, 3072] -> [1, N, 3072]
@@ -453,6 +465,9 @@ class PuLIDFluxPatch:
                     block.forward = types.MethodType(patched_forward, block)
                     self.original_forward_methods[f"single_{i}"] = block
 
+        # Mark the transformer so subsequent patches are rejected until unpatch.
+        self.transformer._pulid_patch_owner = id(self)
+
     def unpatch(self):
         """Restore original forward methods."""
         for key, block in self.original_forward_methods.items():
@@ -460,5 +475,8 @@ class PuLIDFluxPatch:
                 block.forward = block._original_forward
                 del block._original_forward
         self.original_forward_methods = {}
+        # Only clear the owner flag if we own it.
+        if getattr(self.transformer, "_pulid_patch_owner", None) == id(self):
+            self.transformer._pulid_patch_owner = None
         print("  FLUX transformer unpatched")
 

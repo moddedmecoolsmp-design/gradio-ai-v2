@@ -167,7 +167,6 @@ class BatchGenerator:
             yield "No video input provided.", None
             return
 
-        temp_output_dir = tempfile.mkdtemp()
         if not video_output_path:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             video_output_path = os.path.join(self.pm.base_dir, "output", "videos", f"output_{timestamp}.mp4")
@@ -229,7 +228,6 @@ class BatchGenerator:
 
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
-            shutil.rmtree(temp_output_dir, ignore_errors=True)
 
     def create_video_from_frames(self, frames_dir, output_path, fps, audio_source=None, temp_dir=None):
         processed_frames = sorted([f for f in os.listdir(frames_dir) if f.endswith("_out.png")])

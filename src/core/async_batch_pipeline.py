@@ -256,7 +256,13 @@ class DynamicBatchSizer:
         self.oom_count = 0
 
     def get_available_vram_mb(self) -> float:
-        """Get available VRAM in MB."""
+        """Get available VRAM in MB.
+
+        Returns ``float('inf')`` on CPU-only hosts so the VRAM-based adjuster
+        in :meth:`check_and_adjust` becomes a no-op (CPU has no VRAM, so a
+        VRAM threshold is meaningless there and shouldn't force batch size to
+        the minimum).
+        """
         if torch.cuda.is_available():
             # Use mem_get_info for accurate free memory (handles fragmentation and other apps)
             free_bytes, total_bytes = torch.cuda.mem_get_info(0)
