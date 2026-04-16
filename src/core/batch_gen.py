@@ -167,7 +167,6 @@ class BatchGenerator:
             yield "No video input provided.", None
             return
 
-        temp_output_dir = tempfile.mkdtemp()
         if not video_output_path:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             video_output_path = os.path.join(self.pm.base_dir, "output", "videos", f"output_{timestamp}.mp4")

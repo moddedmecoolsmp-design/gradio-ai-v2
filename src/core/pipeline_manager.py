@@ -71,7 +71,6 @@ class PipelineManager:
         self.flux_anime2real_lora_path = os.path.join(self.loras_dir, "ultra_real_amateur_selfies_klein4b.safetensors")
 
         self._verified_model_repos: set = set()
-        self._original_sdpa = None  # Saved original F.scaled_dot_product_attention before SageAttention patch
 
     def configure_optimization_policy(
         self,
@@ -1055,26 +1054,7 @@ class PipelineManager:
         # Install: pip install sageattention (or sageattention-windows for Windows)
         if device == "cuda" and torch.cuda.is_available():
             try:
-                from sageattention import sageattn
-                import torch.nn.functional as F
-
-                # Monkey-patch scaled_dot_product_attention with sageattn.
-                # This is the simplest integration method and works with all
-                # diffusers models that use SDPA internally.
-                if not getattr(F.scaled_dot_product_attention, "_sage_patched", False):
-                    _original_sdpa = F.scaled_dot_product_attention
-                    self._original_sdpa = _original_sdpa
-                    def sage_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, *args, **kwargs):
-                        # Fall back to original SDPA if shapes are incompatible
-                        if attn_mask is not None or dropout_p > 0.0:
-                            return _original_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, *args, **kwargs)
-                        try:
-                            return sageattn(query, key, value, is_causal=is_causal, tensor_layout="HND")
-                        except Exception:
-                            return _original_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, *args, **kwargs)
-                    sage_sdpa._sage_patched = True
-                    F.scaled_dot_product_attention = sage_sdpa
-                    print("  SageAttention enabled (INT8 QK + FP16 PV attention).")
+                self._install_sage_attention_patch()
             except ImportError:
                 pass
             except Exception as exc:
@@ -1173,8 +1153,7 @@ class PipelineManager:
         from src.image import lora_zimage
 
         is_quantized = any(q in str(self.current_model) for q in ["sdnq", "int8"])
-        supports_native_lora = False
-        if not is_quantized and not supports_native_lora:
+        if not is_quantized:
             return f"LoRA only supported with FLUX quantized models and Z-Image Turbo (Int8) (current: {self.current_model})"
 
         if lora_file is None or lora_file == "":
