@@ -140,9 +140,11 @@ class PoseExtractor:
         if self.preprocessor is not None:
             del self.preprocessor
             self.preprocessor = None
-            cache_key = f"{self.detector_type}_{self.device}"
-            if cache_key in _pose_preprocessor_cache:
-                del _pose_preprocessor_cache[cache_key]
+            with _pose_cache_lock:
+                preprocessor_key = f"{self.detector_type}_{self.device}"
+                _pose_preprocessor_cache.pop(preprocessor_key, None)
+                extractor_key = f"{self.device}_{self.detector_type}"
+                _pose_extractor_cache.pop(extractor_key, None)
             
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
