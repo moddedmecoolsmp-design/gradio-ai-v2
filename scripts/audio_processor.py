@@ -29,6 +29,7 @@ class AudioProcessor:
             print(f"Extracting audio from {input_path}...")
             video = VideoFileClip(input_path)
             video.audio.write_audiofile(temp_audio, fps=16000, nbytes=2, codec='pcm_s16le')
+            video.close()
         else:
             # For mp3/wav, we still convert to 16kHz mono for optimal processing
             audio = AudioSegment.from_file(input_path)

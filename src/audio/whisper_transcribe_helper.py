@@ -238,8 +238,8 @@ class WhisperTranscriber:
             import os
             
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                sf.write(tmp.name, chunk_audio, whisperx.audio.SAMPLE_RATE)
                 temp_file = tmp.name
+            sf.write(temp_file, chunk_audio, whisperx.audio.SAMPLE_RATE)
             
             try:
                 # Transcribe chunk with language detection
