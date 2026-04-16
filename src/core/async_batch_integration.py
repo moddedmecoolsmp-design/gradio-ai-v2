@@ -251,9 +251,12 @@ def create_batch_processor_func(
 
         # 4. Run Inference (Batch)
         # Disable autocast for SDNQ models to avoid "Unexpected floating ScalarType" error
+        # `should_enable_autocast` inspects `pipe` directly for SDNQ / quantized markers,
+        # so pass model_key=None here rather than a noisy str(type(pipe)) string that
+        # can't match any of the expected tags.
         autocast_context = (
             autocast_ctx
-            if (autocast_ctx and should_enable_autocast(device, str(type(pipe)), pipe))
+            if (autocast_ctx and should_enable_autocast(device, None, pipe))
             else contextlib.nullcontext()
         )
 
@@ -504,46 +507,27 @@ def run_async_batch_processing(
 
     This function can be called from the existing synchronous code.
     """
-    # Check if event loop exists
+    coro_factory = lambda: process_batch_folder_async(
+        image_paths=image_paths,
+        pipe=pipe,
+        device=device,
+        output_folder=output_folder,
+        progress_callback=progress_callback,
+        **process_kwargs
+    )
+
+    # Python 3.10+: `asyncio.get_event_loop()` is deprecated when no loop is
+    # running. Probe for a running loop explicitly; if there isn't one,
+    # `asyncio.run` creates and tears down its own.
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Create new loop in thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    asyncio.run,
-                    process_batch_folder_async(
-                        image_paths=image_paths,
-                        pipe=pipe,
-                        device=device,
-                        output_folder=output_folder,
-                        progress_callback=progress_callback,
-                        **process_kwargs
-                    )
-                )
-                return future.result()
-        else:
-            # Use existing loop
-            return loop.run_until_complete(
-                process_batch_folder_async(
-                    image_paths=image_paths,
-                    pipe=pipe,
-                    device=device,
-                    output_folder=output_folder,
-                    progress_callback=progress_callback,
-                    **process_kwargs
-                )
-            )
+        asyncio.get_running_loop()
     except RuntimeError:
-        # No event loop, create new one
-        return asyncio.run(
-            process_batch_folder_async(
-                image_paths=image_paths,
-                pipe=pipe,
-                device=device,
-                output_folder=output_folder,
-                progress_callback=progress_callback,
-                **process_kwargs
-            )
-        )
+        return asyncio.run(coro_factory())
+
+    # A loop is already running (e.g. we were called from within a Gradio
+    # async handler). `asyncio.run` would raise, so hop into a worker thread
+    # that owns its own fresh loop.
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(asyncio.run, coro_factory())
+        return future.result()

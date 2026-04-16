@@ -14,8 +14,7 @@ try:
 except Exception:
     sf = None
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Entry-point controls log config; library modules just request a logger.
 logger = logging.getLogger(__name__)
 
 class QwenTTSHandler:

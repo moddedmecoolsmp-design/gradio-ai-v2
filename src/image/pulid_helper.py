@@ -18,8 +18,10 @@ from typing import Optional, Union, List
 
 from src.constants import LEGACY_CHARACTER_MANAGER_STATE_FILENAME
 
-# Global cache for PuLID models
-_pulid_cache = {}
+# Global cache for PuLID models (thread-safe).
+import threading as _threading
+_pulid_cache: dict = {}
+_pulid_cache_lock = _threading.Lock()
 
 def get_memory_usage():
     """Get current CUDA memory usage in GB."""
@@ -182,9 +184,12 @@ class PuLIDHelper:
 
 def get_pulid_helper(device="cuda", enable_fp8=True):
     key = f"{device}_{enable_fp8}"
-    if key not in _pulid_cache:
-        _pulid_cache[key] = PuLIDHelper(device, enable_fp8)
-    return _pulid_cache[key]
+    with _pulid_cache_lock:
+        helper = _pulid_cache.get(key)
+        if helper is None:
+            helper = PuLIDHelper(device, enable_fp8)
+            _pulid_cache[key] = helper
+        return helper
 
 class MultiCharacterManager:
     """Manages character detection, clustering and embedding storage."""

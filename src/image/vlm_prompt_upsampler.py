@@ -23,29 +23,32 @@ def _load_model(device: str):
     from transformers import AutoModelForCausalLM, AutoProcessor
 
     device_key = _get_device_key(device)
-    cached = _CACHE.get(device_key)
-    if cached:
-        return cached["model"], cached["processor"]
+    # Serialise the load-or-reuse path so two concurrent callers can't both
+    # pay the Florence-2 from_pretrained cost (and duplicate VRAM usage).
+    with _CACHE_LOCK:
+        cached = _CACHE.get(device_key)
+        if cached:
+            return cached["model"], cached["processor"]
 
-    resolved_device = _resolve_device(device)
-    dtype = torch.float16 if resolved_device == "cuda" else torch.float32
+        resolved_device = _resolve_device(device)
+        dtype = torch.float16 if resolved_device == "cuda" else torch.float32
 
-    model = AutoModelForCausalLM.from_pretrained(
-        _MODEL_ID,
-        torch_dtype=dtype,
-        trust_remote_code=True,
-    )
-    processor = AutoProcessor.from_pretrained(
-        _MODEL_ID,
-        trust_remote_code=True,
-    )
+        model = AutoModelForCausalLM.from_pretrained(
+            _MODEL_ID,
+            torch_dtype=dtype,
+            trust_remote_code=True,
+        )
+        processor = AutoProcessor.from_pretrained(
+            _MODEL_ID,
+            trust_remote_code=True,
+        )
 
-    if resolved_device == "cuda":
-        model = model.to("cuda")
-    model.eval()
+        if resolved_device == "cuda":
+            model = model.to("cuda")
+        model.eval()
 
-    _CACHE[device_key] = {"model": model, "processor": processor, "device": resolved_device}
-    return model, processor
+        _CACHE[device_key] = {"model": model, "processor": processor, "device": resolved_device}
+        return model, processor
 
 
 def _run_task(

@@ -4,6 +4,7 @@ Uses DWPose/OpenPose for preserving character poses and facial expressions
 """
 
 import logging
+import threading
 
 import torch
 import numpy as np
@@ -12,8 +13,13 @@ from typing import Optional, Literal
 
 logger = logging.getLogger(__name__)
 
-# Global cache for pose preprocessors
-_pose_preprocessor_cache = {}
+# Separate caches for the two concepts — a raw `controlnet_aux` preprocessor
+# (keyed by detector_type + device) and a higher-level `PoseExtractor`
+# singleton (keyed by device + detector_type). A shared `_pose_cache_lock`
+# serialises get-or-create so concurrent Gradio handlers don't double-load.
+_pose_preprocessor_cache: dict = {}
+_pose_extractor_cache: dict = {}
+_pose_cache_lock = threading.Lock()
 
 
 class PoseExtractor:
@@ -38,30 +44,31 @@ class PoseExtractor:
         """Load pose detection preprocessor."""
         if self.preprocessor is not None:
             return
-            
+
         cache_key = f"{self.detector_type}_{self.device}"
-        if cache_key in _pose_preprocessor_cache:
-            self.preprocessor = _pose_preprocessor_cache[cache_key]
-            return
-        
-        try:
-            from controlnet_aux import DWposeDetector, OpenposeDetector
-            
-            print(f"Loading {self.detector_type} pose detector...")
-            
-            if self.detector_type == "dwpose":
-                # DWPose: More accurate, includes facial landmarks
-                self.preprocessor = DWposeDetector.from_pretrained("lllyasviel/Annotators")
-            else:
-                # OpenPose: Classic pose detector
-                self.preprocessor = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
-            _pose_preprocessor_cache[cache_key] = self.preprocessor
-            print(f"  {self.detector_type} loaded successfully")
-            
-        except Exception as e:
-            print(f"  Warning: Failed to load {self.detector_type}: {e}")
-            print("  Pose preservation will not be available")
-            self.preprocessor = None
+        with _pose_cache_lock:
+            cached = _pose_preprocessor_cache.get(cache_key)
+            if cached is not None:
+                self.preprocessor = cached
+                return
+
+            try:
+                from controlnet_aux import DWposeDetector, OpenposeDetector
+
+                print(f"Loading {self.detector_type} pose detector...")
+
+                if self.detector_type == "dwpose":
+                    # DWPose: More accurate, includes facial landmarks
+                    self.preprocessor = DWposeDetector.from_pretrained("lllyasviel/Annotators")
+                else:
+                    # OpenPose: Classic pose detector
+                    self.preprocessor = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+                _pose_preprocessor_cache[cache_key] = self.preprocessor
+                print(f"  {self.detector_type} loaded successfully")
+            except Exception as e:
+                print(f"  Warning: Failed to load {self.detector_type}: {e}")
+                print("  Pose preservation will not be available")
+                self.preprocessor = None
     
     def extract_pose(self,
                     image: Image.Image,
@@ -155,12 +162,13 @@ def get_pose_extractor(device: str = "cuda",
         PoseExtractor instance
     """
     cache_key = f"{device}_{detector_type}"
-    if cache_key in _pose_preprocessor_cache:
-        return _pose_preprocessor_cache[cache_key]
-    
-    extractor = PoseExtractor(device=device, detector_type=detector_type)
-    _pose_preprocessor_cache[cache_key] = extractor
-    return extractor
+    with _pose_cache_lock:
+        cached = _pose_extractor_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        extractor = PoseExtractor(device=device, detector_type=detector_type)
+        _pose_extractor_cache[cache_key] = extractor
+        return extractor
 
 
 def batch_extract_poses(images: list,

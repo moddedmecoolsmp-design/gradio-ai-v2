@@ -4,8 +4,10 @@ import logging
 from typing import List, Tuple, Optional
 from pydub import AudioSegment
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Module-level logger only — the application entry point is responsible for
+# calling logging.basicConfig / dictConfig. Calling it at import time here
+# was a no-op on subsequent imports (first caller wins) and could clobber
+# handlers configured by the app.
 logger = logging.getLogger(__name__)
 
 class AudioSeparator:
@@ -32,9 +34,9 @@ class AudioSeparator:
 
                 if self.pipeline is None:
                     # Fallback to older model or error
-                     model_id = "pyannote/speaker-diarization"
-                     logger.warning(f"Failed to load 3.1, trying {model_id}")
-                     self.pipeline = Pipeline.from_pretrained(model_id, use_auth_token=use_auth_token)
+                    model_id = "pyannote/speaker-diarization"
+                    logger.warning(f"Failed to load 3.1, trying {model_id}")
+                    self.pipeline = Pipeline.from_pretrained(model_id, use_auth_token=use_auth_token)
 
                 if self.pipeline:
                     self.pipeline.to(torch.device(self.device))

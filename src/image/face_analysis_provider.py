@@ -1,9 +1,12 @@
 
 import os
+import threading
+
 import torch
 from insightface.app import FaceAnalysis
 
-_face_analysis_cache = {}
+_face_analysis_cache: dict = {}
+_face_analysis_lock = threading.Lock()
 
 
 def _get_available_onnx_providers():
@@ -69,3 +72,4 @@ def unload_face_analysis():
     _face_analysis_cache = {}
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+ch.cuda.empty_cache()

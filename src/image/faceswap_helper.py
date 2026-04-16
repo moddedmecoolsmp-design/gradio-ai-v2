@@ -3,19 +3,22 @@ InsightFace-based Face Swapping for Character Consistency
 Memory-optimized for 8GB VRAM (RTX 3070)
 """
 
-import torch
+import os
+import threading
+from typing import Optional, List, Union
 
+import torch
 import numpy as np
 from PIL import Image
 import cv2
-import os
-from typing import Optional, List, Union
 from insightface.app import FaceAnalysis
 from insightface.model_zoo import get_model
 from src.image.face_analysis_provider import resolve_onnx_providers
 
-# Global cache
-_faceswap_cache = {}
+# Global cache keyed by device, guarded by a lock so concurrent Gradio
+# handlers share a single FaceSwapHelper per device.
+_faceswap_cache: dict = {}
+_faceswap_lock = threading.Lock()
 
 class FaceSwapHelper:
     """Memory-optimized face swapper using InsightFace inswapper model."""
@@ -160,7 +163,10 @@ class FaceSwapHelper:
             torch.cuda.empty_cache()
 
 def get_faceswap_helper(device="cuda"):
-    """Get or create FaceSwap helper singleton."""
-    if device not in _faceswap_cache:
-        _faceswap_cache[device] = FaceSwapHelper(device)
-    return _faceswap_cache[device]
+    """Get or create FaceSwap helper singleton (thread-safe)."""
+    with _faceswap_lock:
+        helper = _faceswap_cache.get(device)
+        if helper is None:
+            helper = FaceSwapHelper(device)
+            _faceswap_cache[device] = helper
+        return helper
