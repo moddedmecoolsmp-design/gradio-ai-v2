@@ -1371,8 +1371,8 @@ def _legacy_generate_image_impl(
             print(f"  [CUDA Graphs] Capture skipped: {e}")
 
     final_guidance = resolve_generation_guidance(pipeline_manager.current_model, guidance)
-    if is_distilled_model(pipeline_manager.current_model):
-        print("  [Distilled Model] Overriding guidance scale to 0.0")
+    if final_guidance != float(guidance):
+        print(f"  [Model Policy] Guidance scale adjusted: {guidance} -> {final_guidance}")
 
     autocast_ctx = (
         torch.amp.autocast("cuda", dtype=torch.bfloat16)
