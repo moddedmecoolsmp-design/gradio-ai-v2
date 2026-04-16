@@ -562,8 +562,8 @@ async def process_batch_folder_async(
     buckets = {}
     fallback = []
     
-    async def get_image_dimensions(path):
-        """Get image dimensions asynchronously."""
+    def get_image_dimensions(path):
+        """Get image dimensions synchronously (called via asyncio.to_thread)."""
         with Image.open(path) as img:
             new_w, new_h = calculate_dimensions_from_ratio(img.width, img.height, preset)
             new_w, new_h = apply_scale_to_dimensions(new_w, new_h, downscale_factor)
