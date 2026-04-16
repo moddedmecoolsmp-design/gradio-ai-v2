@@ -787,10 +787,11 @@ def create_ui(context: Mapping[str, Any]):
                 enable_faceswap, faceswap_source_image, faceswap_target_index,
                 optimization_profile, enable_windows_compile_probe, enable_cuda_graphs, enable_optional_accelerators,
                 enable_pose_preservation, pose_detector_type, pose_mode, controlnet_strength, show_pose_skeleton,
-                enable_gender_preservation, gender_strength,
+                enable_gender_preservation,
+                preset_choice,
+                gender_strength,
                 enable_prompt_upsampling,
                 enable_klein_anatomy_fix,
-                preset_choice,
                 *[slot['reference_upload'] for slot in character_slots]
             ],
             outputs=[output_image, seed_info, pose_skeleton_output],

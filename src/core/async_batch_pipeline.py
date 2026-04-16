@@ -470,7 +470,7 @@ class AsyncBatchPipeline:
                         stream = self.stream_manager.get_next_stream()
 
                     # Optimized context for RTX 3070: Use BFloat16 if supported, else Float16.
-                    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+                    dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
                     def autocast_factory():
                         model_key = process_kwargs.get("model_choice") or process_kwargs.get("model_key") or str(type(pipe))
                         if device == "cuda" and should_enable_autocast(device, model_key, pipe):
