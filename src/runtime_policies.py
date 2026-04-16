@@ -95,22 +95,27 @@ def is_low_vram_ampere_fast_profile(
     platform_system: Optional[str] = None,
 ) -> bool:
     """
-    OS-agnostic superset of `is_windows_3070_fast_profile`.
+    OS-agnostic variant of `is_windows_3070_fast_profile`.
 
-    Matches any low-VRAM Ampere / Ada 8 GB class GPU (RTX 3050, 3060 Ti, 3070,
-    3070 Ti, 4060, 4060 Ti 8GB). Used to enable the same latency-first preset
-    (sub-1024 default resolution, VAE tiling, attention slicing, SDNQ + SDPA
-    fallbacks) on Linux/macOS hosts that the Windows 3070 profile already
-    enables on Windows.
+    Matches RTX 3070 / 3070 Ti (8 GB Ampere sm_86) on any host OS. The 3070
+    is the reference card this project is tuned for, so the fast-path
+    preset (~768px FLUX int8 default, VAE tiling, attention slicing, SDNQ
+    + SDPA fallbacks) is applied on Linux/macOS as well as Windows.
+
+    Note: We deliberately do NOT match the 12 GB RTX 3060, 16 GB RTX 4060
+    Ti, 3050, or 4060 variants — those either have enough VRAM to run at
+    1024px comfortably (3060 12 GB, 4060 Ti 16 GB) or have different
+    architectures that need their own tuning.
     """
     if str(device).lower() != "cuda":
         return False
 
     normalized_gpu_name = str(gpu_name or "").lower()
     if normalized_gpu_name:
-        for tag in ("3050", "3060", "3070", "4060"):
-            if tag in normalized_gpu_name:
-                return True
+        # 3070 + 3070 Ti only. Both report "3070" in the product name and
+        # both are 8 GB. No overlap with the 12 GB 3060 or 16 GB 4060 Ti.
+        if "3070" in normalized_gpu_name:
+            return True
         return is_windows_3070_fast_profile(
             device=device,
             vram_gb=vram_gb,
@@ -125,9 +130,10 @@ def is_low_vram_ampere_fast_profile(
             gpu_name=gpu_name,
             platform_system=platform_system,
         )
-    # 8 GB Ampere / Ada class cards — widened slightly below the Windows
-    # profile's 7.0 GB floor so 6 GB Ada laptops still get the fast defaults.
-    return 6.0 <= float(vram_gb) <= 8.6
+    # VRAM-only fallback (no name reported): match the 3070's ~8 GB band.
+    # Kept tight (7.0-8.6 GB) to avoid picking up 6 GB laptop Ada cards or
+    # the 12 GB 3060 (11.x GB reported after framebuffer reservation).
+    return 7.0 <= float(vram_gb) <= 8.6
 
 
 def resolve_default_flux_model_choice(

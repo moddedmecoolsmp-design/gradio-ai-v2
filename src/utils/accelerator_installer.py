@@ -125,26 +125,40 @@ def _install_sageattention() -> str:
 
 def _install_xformers() -> str:
     """
-    Install xFormers pinned to the user's existing torch version.
+    Install xFormers without disturbing the user's existing torch build.
 
-    Not all torch builds have a matching xformers wheel; if the exact pin
-    fails we retry once without a pin rather than upgrading torch, which
-    could break the rest of the app.
+    xFormers wheels on PyPI declare a strict `torch==X.Y.Z` dependency. If
+    we let pip resolve normally, it will silently downgrade (or replace
+    with a CPU-only wheel) the user's CUDA-enabled torch to satisfy the
+    xformers requirement — breaking the rest of the app.
+
+    Strategy:
+      1. `--no-deps`: install the xformers wheel without letting pip touch
+         torch. If the ABI happens to line up with the user's torch, this
+         works. If not, the import will fail and we report "failed" — the
+         pipeline already falls back to SDPA in that case.
+      2. As a conservative second attempt we try the normal resolution,
+         which is fine for users with a plain PyPI torch build but may
+         shuffle torch on CUDA-pinned environments. We only take this
+         second path if the user's torch is a vanilla release (no "+cuXXX"
+         local version suffix) so we don't clobber CUDA-enabled builds.
     """
     if _module_importable("xformers"):
         return "present"
 
+    torch_tag: Optional[str] = None
     try:
         import torch  # noqa: WPS433
-        torch_version = str(torch.__version__).split("+")[0]
+        torch_tag = str(torch.__version__)
     except Exception:
-        torch_version = None
+        torch_tag = None
 
-    candidates: List[List[str]] = []
-    if torch_version:
-        candidates.append([f"xformers==0.0.33.post2", f"torch=={torch_version}"])  # try exact torch pin first
-        candidates.append(["xformers"])  # fallback: let pip resolve
-    else:
+    candidates: List[List[str]] = [["xformers", "--no-deps"]]
+    # Only allow the unconstrained install on plain PyPI torch builds.
+    # Builds with a local version suffix (e.g. "2.10.0+cu130") come from
+    # the CUDA-specific index and would be replaced by pip's normal
+    # resolver.
+    if torch_tag is not None and "+" not in torch_tag:
         candidates.append(["xformers"])
 
     for args in candidates:
