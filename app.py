@@ -984,7 +984,7 @@ def log_generation_runtime_stack(
     runtime_stack = {
         "profile": resolved_profile,
         "cuda_runtime": getattr(torch.version, "cuda", None) or "none",
-        "autocast": should_enable_autocast(device, current_model_key, pipe),
+        "autocast": should_enable_autocast(device, current_model_key, pipeline_manager.pipe),
         "attention_slicing": bool(policy.get("attention_slicing", False)),
         "vae_slicing": bool(policy.get("vae_slicing", False)),
         "vae_tiling": bool(policy.get("vae_tiling", False)),
@@ -1651,7 +1651,7 @@ def _legacy_generate_image_impl(
                 height=aligned_h,
                 width=aligned_w,
                 num_inference_steps=int(steps),
-                guidance_scale=float(guidance),
+                guidance_scale=final_guidance,
                 generator=create_torch_generator(device, seed),
                 num_images_per_prompt=1,
             ).images[0]
@@ -1716,7 +1716,7 @@ def _legacy_generate_image_impl(
     pose_info = f" | Pose: {pose_mode}" if enable_pose_preservation and pose_image is not None else ""
     pulid_info = " | PuLID: Yes" if enable_multi_character and len(character_embeddings) > 0 else ""
     swap_info = " | FaceSwap: Yes" if enable_faceswap and faceswap_source_image is not None else ""
-    fallback_info = f" | Note: {last_model_fallback_reason}" if last_model_fallback_reason else ""
+    fallback_info = f" | Note: {pipeline_manager.last_model_fallback_reason}" if pipeline_manager.last_model_fallback_reason else ""
 
     return_pose = pose_image if (show_pose_skeleton and pose_image is not None) else None
 
