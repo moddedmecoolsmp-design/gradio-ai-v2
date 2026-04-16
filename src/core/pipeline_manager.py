@@ -453,7 +453,13 @@ class PipelineManager:
         return accelerated_pipe, dict(status)
 
     def compile_pipeline_components(self, pipe, device, cache_key=None, model_key: Optional[str] = None):
-        """Apply torch.compile to pipeline components for RTX 3070 Ampere optimization."""
+        """Apply torch.compile to pipeline components for RTX 3070 Ampere optimization.
+
+        Compiles the transformer/unet (regional or full) and optionally the VAE
+        decoder.  Uses ``dynamic=True`` so resolution changes do not trigger
+        recompilation, and configures a persistent on-disk compile cache to
+        speed up warm starts.
+        """
         if device != "cuda" or not torch.cuda.is_available():
             return False
 
@@ -483,32 +489,114 @@ class PipelineManager:
         ):
             return False
 
+        # --- persistent compile cache for faster warm starts ---
+        self._setup_compile_cache()
+
         try:
             compile_mode = "reduce-overhead" if os.name == "nt" else "max-autotune"
             fullgraph = False if os.name == "nt" else True
             # Prefer regional compilation (compile_repeated_blocks) for dramatically
             # faster compile latency (~7x faster cold start) while keeping the same
             # runtime speedup. Fall back to full torch.compile if unavailable.
+            # dynamic=True prevents recompilation when image resolution changes.
             compiled_any = False
             for component_name in ("transformer", "unet"):
                 component = getattr(pipe, component_name, None)
                 if component is None:
                     continue
                 if hasattr(component, "compile_repeated_blocks"):
-                    component.compile_repeated_blocks(fullgraph=fullgraph)
+                    component.compile_repeated_blocks(fullgraph=fullgraph, dynamic=True)
                     compiled_any = True
                 else:
-                    setattr(pipe, component_name, torch.compile(component, mode=compile_mode, fullgraph=fullgraph))
+                    setattr(pipe, component_name, torch.compile(
+                        component, mode=compile_mode, fullgraph=fullgraph, dynamic=True,
+                    ))
                     compiled_any = True
             if not compiled_any:
                 return False
             self.compiled_models[key] = True
             record_torch_compile_probe_result(key, True)
+
+            # --- compile VAE decoder (separate from transformer) ---
+            self._compile_vae_decoder(pipe, device, key)
+
             return True
         except Exception as exc:
             print(f"  torch.compile skipped: {exc}")
             record_torch_compile_probe_result(key, False)
             return False
+
+    def _setup_compile_cache(self) -> None:
+        """Configure persistent on-disk compile cache for faster warm starts."""
+        cache_dir = os.path.join(self.cache_dir, "torch_compile")
+        os.makedirs(cache_dir, exist_ok=True)
+        try:
+            inductor_config = getattr(torch, "_inductor", None)
+            if inductor_config is not None and hasattr(inductor_config, "config"):
+                inductor_config.config.cache_dir = cache_dir
+        except Exception:
+            pass
+
+    def _compile_vae_decoder(self, pipe, device: str, parent_key: str) -> None:
+        """Compile the VAE decoder for faster latent-to-pixel decode."""
+        vae = getattr(pipe, "vae", None)
+        if vae is None:
+            return
+        vae_key = f"{parent_key}-vae-decode:{device}"
+        if self.compiled_models.get(vae_key):
+            return
+        try:
+            compile_mode = "reduce-overhead" if os.name == "nt" else "max-autotune"
+            fullgraph = False if os.name == "nt" else True
+            pipe.vae.decode = torch.compile(
+                pipe.vae.decode, mode=compile_mode, fullgraph=fullgraph, dynamic=True,
+            )
+            self.compiled_models[vae_key] = True
+            print(f"  VAE decoder compiled ({parent_key}).")
+        except Exception as exc:
+            print(f"  VAE decoder compile skipped: {exc}")
+
+    _sage_attention_applied = False
+
+    def _apply_sage_attention(self, device: str) -> None:
+        """Monkey-patch SDPA with SageAttention for 2-5x faster attention.
+
+        SageAttention uses INT8 quantized QK + FP16 PV matmuls.  The patch is
+        applied once globally and benefits every model that uses
+        ``F.scaled_dot_product_attention`` internally (all diffusers models).
+        Optional — silently skipped if ``sageattention`` is not installed.
+        """
+        if device != "cuda" or not torch.cuda.is_available():
+            return
+        if PipelineManager._sage_attention_applied:
+            return
+        try:
+            from sageattention import sageattn
+            import torch.nn.functional as F
+
+            if getattr(F.scaled_dot_product_attention, "_sage_patched", False):
+                PipelineManager._sage_attention_applied = True
+                return
+
+            _original_sdpa = F.scaled_dot_product_attention
+            self._original_sdpa = _original_sdpa
+
+            def sage_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, *args, **kwargs):
+                if attn_mask is not None or dropout_p > 0.0:
+                    return _original_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, *args, **kwargs)
+                try:
+                    return sageattn(query, key, value, is_causal=is_causal, tensor_layout="HND")
+                except Exception:
+                    return _original_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, *args, **kwargs)
+
+            sage_sdpa._sage_patched = True
+            F.scaled_dot_product_attention = sage_sdpa
+            PipelineManager._sage_attention_applied = True
+            print("  SageAttention enabled (INT8 QK + FP16 PV attention).")
+        except ImportError:
+            pass
+        except Exception as exc:
+            print(f"  SageAttention skipped: {exc}")
 
     def _apply_pipeline_memory_policy(self, pipe, model_key: str, device: str):
         self.apply_runtime_memory_policy(
@@ -827,6 +915,8 @@ class PipelineManager:
         compile_key = "zimage-int8"
         self._apply_pipeline_memory_policy(pipe, model_key=compile_key, device=device)
 
+        self._apply_sage_attention(device)
+
         self.compile_pipeline_components(pipe, device, compile_key, model_key=compile_key)
 
         print("  Z-Image-Turbo (int8) load complete.")
@@ -956,6 +1046,8 @@ class PipelineManager:
 
         self._apply_pipeline_memory_policy(pipe, model_key="flux2-klein-int8", device=device)
 
+        self._apply_sage_attention(device)
+
         self.compile_pipeline_components(
             pipe,
             device,
@@ -1052,48 +1144,13 @@ class PipelineManager:
 
         self._apply_pipeline_memory_policy(pipe, model_key="flux2-klein-sdnq", device=device)
 
-        # SageAttention: 2-5x faster attention via INT8 quantized QK + FP16 PV.
-        # Optional — only enabled if sageattention package is installed.
-        # Install: pip install sageattention (or sageattention-windows for Windows)
-        if device == "cuda" and torch.cuda.is_available():
-            try:
-                from sageattention import sageattn
-                import torch.nn.functional as F
+        self._apply_sage_attention(device)
 
-                # Monkey-patch scaled_dot_product_attention with sageattn.
-                # This is the simplest integration method and works with all
-                # diffusers models that use SDPA internally.
-                if not getattr(F.scaled_dot_product_attention, "_sage_patched", False):
-                    _original_sdpa = F.scaled_dot_product_attention
-                    self._original_sdpa = _original_sdpa
-                    def sage_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, *args, **kwargs):
-                        # Fall back to original SDPA if shapes are incompatible
-                        if attn_mask is not None or dropout_p > 0.0:
-                            return _original_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, *args, **kwargs)
-                        try:
-                            return sageattn(query, key, value, is_causal=is_causal, tensor_layout="HND")
-                        except Exception:
-                            return _original_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, *args, **kwargs)
-                    sage_sdpa._sage_patched = True
-                    F.scaled_dot_product_attention = sage_sdpa
-                    print("  SageAttention enabled (INT8 QK + FP16 PV attention).")
-            except ImportError:
-                pass
-            except Exception as exc:
-                print(f"  SageAttention skipped: {exc}")
-
-        # Compile VAE decoder for faster decode (separate from transformer compile)
-        if device == "cuda" and torch.cuda.is_available() and hasattr(pipe, "vae") and pipe.vae is not None:
-            try:
-                compile_mode = "reduce-overhead" if os.name == "nt" else "max-autotune"
-                fullgraph = False if os.name == "nt" else True
-                vae_key = f"flux2-sdnq-vae-decode:{device}"
-                if not self.compiled_models.get(vae_key):
-                    pipe.vae.decode = torch.compile(pipe.vae.decode, mode=compile_mode, fullgraph=fullgraph)
-                    self.compiled_models[vae_key] = True
-                    print("  FLUX SDNQ VAE decoder compiled.")
-            except Exception as exc:
-                print(f"  FLUX SDNQ VAE decoder compile skipped: {exc}")
+        # Compile VAE decoder for faster decode (SDNQ transformer is not
+        # compiled because the inductor backend lacks oneDNN quantized kernels,
+        # but the VAE is standard FP16/BF16 and benefits from compilation).
+        self._setup_compile_cache()
+        self._compile_vae_decoder(pipe, device, "flux2-klein-sdnq")
 
         return pipe
 
@@ -1267,6 +1324,7 @@ class PipelineManager:
         if self._original_sdpa is not None and getattr(F.scaled_dot_product_attention, "_sage_patched", False):
             F.scaled_dot_product_attention = self._original_sdpa
             self._original_sdpa = None
+            PipelineManager._sage_attention_applied = False
             print("  SageAttention monkey-patch removed (restoring original SDPA).")
 
     def check_model_exists(self, model_repo_id: str) -> bool:
