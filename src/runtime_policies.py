@@ -88,6 +88,48 @@ def is_windows_3070_fast_profile(
     return 7.0 <= float(vram_gb) <= 8.6
 
 
+def is_low_vram_ampere_fast_profile(
+    device: str,
+    vram_gb: Optional[float] = None,
+    gpu_name: Optional[str] = None,
+    platform_system: Optional[str] = None,
+) -> bool:
+    """
+    OS-agnostic superset of `is_windows_3070_fast_profile`.
+
+    Matches any low-VRAM Ampere / Ada 8 GB class GPU (RTX 3050, 3060 Ti, 3070,
+    3070 Ti, 4060, 4060 Ti 8GB). Used to enable the same latency-first preset
+    (sub-1024 default resolution, VAE tiling, attention slicing, SDNQ + SDPA
+    fallbacks) on Linux/macOS hosts that the Windows 3070 profile already
+    enables on Windows.
+    """
+    if str(device).lower() != "cuda":
+        return False
+
+    normalized_gpu_name = str(gpu_name or "").lower()
+    if normalized_gpu_name:
+        for tag in ("3050", "3060", "3070", "4060"):
+            if tag in normalized_gpu_name:
+                return True
+        return is_windows_3070_fast_profile(
+            device=device,
+            vram_gb=vram_gb,
+            gpu_name=gpu_name,
+            platform_system=platform_system,
+        )
+
+    if vram_gb is None:
+        return is_windows_3070_fast_profile(
+            device=device,
+            vram_gb=vram_gb,
+            gpu_name=gpu_name,
+            platform_system=platform_system,
+        )
+    # 8 GB Ampere / Ada class cards — widened slightly below the Windows
+    # profile's 7.0 GB floor so 6 GB Ada laptops still get the fast defaults.
+    return 6.0 <= float(vram_gb) <= 8.6
+
+
 def resolve_default_flux_model_choice(
     device: str,
     vram_gb: Optional[float] = None,
@@ -126,17 +168,56 @@ def resolve_default_resolution_preset(
     platform_system: Optional[str] = None,
 ) -> str:
     choice = str(model_choice or "")
-    if "Int8" in choice and is_windows_3070_fast_profile(
+    on_low_vram_ampere = is_low_vram_ampere_fast_profile(
         device=device,
         vram_gb=vram_gb,
         gpu_name=gpu_name,
         platform_system=platform_system,
-    ):
+    )
+    # Int8 FLUX path defaults to the aggressive ~768px preset on any low-VRAM
+    # Ampere class GPU (Linux 3070 now included, not only Windows). The SDNQ
+    # 4-bit path keeps the ~1024px default — its 4-bit weights already give
+    # enough headroom that the extra resolution is worth the wall-clock.
+    if "Int8" in choice and on_low_vram_ampere:
         return FAST_RESOLUTION_PRESET
 
     if mode == "batch":
         return BATCH_STANDARD_RESOLUTION_PRESET
     return STANDARD_RESOLUTION_PRESET
+
+
+def is_klein_distilled_model(model_key: Optional[str]) -> bool:
+    """True for FLUX.2 [klein] distilled variants (4-step inference)."""
+    value = str(model_key or "").lower()
+    if "klein" not in value:
+        return False
+    if "base" in value:
+        return False
+    return True
+
+
+def resolve_default_inference_steps(
+    model_key: Optional[str],
+    requested_steps: Optional[int],
+) -> int:
+    """
+    Clamp step count for distilled models whose quality plateaus at ~4 steps.
+
+    - FLUX.2 [klein] distilled (4B/9B) — official recipe is 4 steps; going
+      above ~8 is pure overhead with no quality gain.
+    - Z-Image Turbo — 4-step model with identical behavior.
+    - Everything else is passed through unchanged.
+    """
+    try:
+        requested = int(requested_steps) if requested_steps is not None else 4
+    except (TypeError, ValueError):
+        requested = 4
+    if requested <= 0:
+        requested = 4
+
+    if is_klein_distilled_model(model_key) or is_zimage_model(model_key):
+        return max(1, min(requested, 8))
+    return requested
 
 
 def resolve_generation_guidance(model_key: Optional[str], guidance: float) -> float:

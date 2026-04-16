@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Any, Union, Callable
 from src.constants import CHARACTER_MANAGER_STATE_FILENAME
 from src.runtime_policies import (
     is_flux_model,
+    resolve_default_inference_steps,
     resolve_generation_guidance,
     should_enable_autocast,
     should_use_attention_slicing,
@@ -88,6 +89,19 @@ class ImageGenerator:
 
         pipe = self.pm.load_pipeline(model_choice, device)
         current_model = self.pm.current_model
+
+        # Clamp step count for distilled models. FLUX.2 [klein] and Z-Image
+        # Turbo are 4-step-distilled: quality plateaus at ~4 steps and any
+        # additional steps are wasted wall-clock on RTX 3070. Users who pick
+        # 20+ steps in the UI unknowingly 5× their latency with no visible
+        # improvement; clamp silently here instead of surprising them.
+        effective_steps = resolve_default_inference_steps(current_model, steps)
+        if effective_steps != steps:
+            print(
+                f"  Steps clamped {steps}→{effective_steps} for distilled model "
+                f"'{current_model}' (4-step recipe, quality plateaus above ~8)."
+            )
+            steps = effective_steps
 
         if self.stop_requested:
             return None, "Cancelled by user.", None
