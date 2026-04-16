@@ -14,10 +14,12 @@ env/
 *.swp
 *.swo
 
-# Output
+# Generated images and media
 *.png
 *.jpg
 *.jpeg
+*.mp4
+*_out.png
 
 # OS
 .DS_Store
@@ -26,33 +28,28 @@ Thumbs.db
 # Gradio
 flagged/
 
-# Project caches / temp outputs
+# Project runtime directories
 cache/
 output/
-logs/debug/
+logs/
 temp/
+models/
+loras/
+user_state/
 *.incomplete
 
-# Video and render artifacts
-*_out.png
-*.mp4
+# Dependency verification stamp
+.dependencies_verified
 
-# Codex local configuration
+# Codex / AI agent local configuration
 .codex/
 .cursor/
-
-# Claude Flow runtime data
-.claude-flow/data/
-.claude-flow/logs/
 .claude-flow/
-
-# Local agent/tooling runtime state
 .agents/
 .claude/
 .swarm/
 .windsurf/
 .mcp.json
-.dependencies_verified
 nul
 
 # Environment variables
