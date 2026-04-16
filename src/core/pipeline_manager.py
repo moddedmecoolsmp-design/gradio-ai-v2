@@ -1178,6 +1178,19 @@ class PipelineManager:
             new_is_flux = is_flux_model(model_type)
             if not (old_is_flux and new_is_flux):
                 self.flux2_small_decoder_vaes.clear()
+            # Invalidate stale torch.compile cache entries. The transformer
+            # inside the old pipe has just been destroyed, so any compile
+            # keys guarding transformer compilation must be dropped or the
+            # fresh pipeline silently ships with an uncompiled transformer.
+            # VAE compile keys are dropped whenever the matching VAE cache
+            # was cleared (non-flux transitions drop all VAE keys; flux
+            # -> flux keeps flux2-sdnq-vae-* keys because the VAE object
+            # is preserved via self.flux2_small_decoder_vaes).
+            _preserve_flux_vae_keys = old_is_flux and new_is_flux
+            for _key in list(self.compiled_models.keys()):
+                if _preserve_flux_vae_keys and "flux2-sdnq-vae-" in _key:
+                    continue
+                self.compiled_models.pop(_key, None)
             self.optional_accelerator_pipes.clear()
             self.active_runtime_memory_policy = {}
             self.active_optional_accelerator_status = {}
