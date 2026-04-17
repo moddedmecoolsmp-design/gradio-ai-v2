@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 from src.constants import BUILTIN_LORA_CHOICES
-from src.image import faceswap_ui
+from src.image import faceswap_config, faceswap_ui
 
 def on_builtin_lora_change(builtin_lora):
     """Toggle file upload visibility based on built-in LoRA selection."""

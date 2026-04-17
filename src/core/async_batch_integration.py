@@ -319,8 +319,7 @@ def create_batch_processor_func(
         for i in range(process_limit):
             res = results[i]
             path = paths[i]
-            final_results.append(res)
-            
+
             # Save
             base_name = os.path.splitext(os.path.basename(path))[0]
 

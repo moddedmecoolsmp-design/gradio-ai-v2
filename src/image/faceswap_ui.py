@@ -57,20 +57,21 @@ def _empty_slot_updates() -> List[Any]:
 def scan_output_for_faces(
     last_output_image: Optional[Image.Image],
     device: str,
-) -> Tuple[Any, List[DetectedFace], str]:
+) -> Tuple[Any, ...]:
     """
     Detect faces in ``last_output_image`` and prepare UI updates for the
     pre-allocated face-swap slots.
 
-    Returns ``(slot_updates, detected_state, status_text)`` where
-    ``slot_updates`` is a flat list (row_visible, thumbnail_value, ...)
-    of length ``2 * MAX_FACE_SLOTS`` and ``detected_state`` is the list
-    of ``DetectedFace`` objects (stashed in ``gr.State`` so the Apply
-    handler knows how many faces the target has).
+    Returns a flat tuple of ``(*slot_updates, detected_state, status_text)``
+    suitable for binding directly to a Gradio ``outputs=`` list. The
+    slot updates alternate ``(row_visible, thumbnail_value)`` in slot
+    index order for a total of ``2 * MAX_FACE_SLOTS`` entries, followed
+    by the detected-face state (stashed in ``gr.State`` so the Apply
+    handler knows how many faces the target has) and the status string.
     """
     if last_output_image is None:
         return (
-            _empty_slot_updates(),
+            *_empty_slot_updates(),
             [],
             "No generated image yet. Generate an image first, then scan for faces.",
         )
@@ -80,14 +81,14 @@ def scan_output_for_faces(
         detected = swapper.detect_faces(last_output_image)
     except Exception as exc:
         return (
-            _empty_slot_updates(),
+            *_empty_slot_updates(),
             [],
             f"Face detection failed: {exc}",
         )
 
     if not detected:
         return (
-            _empty_slot_updates(),
+            *_empty_slot_updates(),
             [],
             "No faces detected in the generated image.",
         )
@@ -108,7 +109,7 @@ def scan_output_for_faces(
         f"Detected {len(detected)} face(s). Assign a source image or saved "
         f"character to each slot, then click Apply."
     )
-    return updates, detected, status
+    return (*updates, detected, status)
 
 
 # ----------------------------------------------------------------------
