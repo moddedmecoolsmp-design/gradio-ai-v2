@@ -60,8 +60,29 @@ class PipelineManager:
         # Klein Anatomy Quality Fixer — 4B variant.  The Civitai URL takes
         # a *version* ID (2617474 is the 4B; the bare model ID 2324991 used
         # to resolve to the 9B build which silently mismatched 4B users).
+        # The on-disk filename is suffixed ``_4b`` so existing installs that
+        # already downloaded the old 9B weights at the un-suffixed path
+        # don't keep short-circuiting the download guard and silently
+        # running the wrong LoRA.  A best-effort cleanup of the stale
+        # 9B file runs below so disk isn't wasted.
         self.klein_anatomy_lora_url = "https://civitai.com/api/download/models/2617474"
-        self.klein_anatomy_lora_path = os.path.join(self.loras_dir, "kleinSliderAnatomy.safetensors")
+        self.klein_anatomy_lora_path = os.path.join(
+            self.loras_dir, "kleinSliderAnatomy_4b.safetensors"
+        )
+        _legacy_anatomy_path = os.path.join(
+            self.loras_dir, "kleinSliderAnatomy.safetensors"
+        )
+        if os.path.exists(_legacy_anatomy_path):
+            try:
+                os.remove(_legacy_anatomy_path)
+                print(
+                    "  [migration] removed legacy Klein Anatomy 9B LoRA at "
+                    f"{_legacy_anatomy_path}; 4B build will download on next use."
+                )
+            except OSError:
+                # Best-effort: leaving it in place wastes ~11 MB but never
+                # breaks generation because the 4B path is independent.
+                pass
 
         # Klein High-Resolution LoRA — 4B build.  Used as the quality-first
         # upscaler path (trigger "High resolution", strength 0.9, ~88 MB).

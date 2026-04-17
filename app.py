@@ -197,7 +197,10 @@ APP_TEMP_DIR = os.environ.get("UFIG_TEMP_DIR", os.environ.get("GRADIO_TEMP_DIR")
 if APP_TEMP_DIR:
     tempfile.tempdir = APP_TEMP_DIR
 
-KLEIN_ANATOMY_LORA_PATH = os.path.join(LORAS_DIR, "kleinSliderAnatomy.safetensors")
+# Klein Anatomy Quality Fixer — 4B build.  Filename is suffixed so existing
+# installs with the old 9B weights don't short-circuit the download guard.
+# PipelineManager.__init__ also removes the un-suffixed legacy file.
+KLEIN_ANATOMY_LORA_PATH = os.path.join(LORAS_DIR, "kleinSliderAnatomy_4b.safetensors")
 
 
 
