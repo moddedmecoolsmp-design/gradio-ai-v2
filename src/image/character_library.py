@@ -72,6 +72,59 @@ def _safe_name(name: str) -> str:
     return name or "character"
 
 
+def _read_meta_name(meta_path: str) -> Optional[str]:
+    """Return the display name stored in ``meta.json`` or None on error."""
+    try:
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = meta.get("name")
+    if not isinstance(value, str):
+        return None
+    return value.strip()
+
+
+def _resolve_target_dir(base: str, display_name: str) -> str:
+    """
+    Return the directory path to use when saving ``display_name``.
+
+    - If no directory for the sanitized slug exists, use the slug as-is.
+    - If it exists and the stored display name matches (case-insensitive),
+      treat this as an update and reuse the directory.
+    - Otherwise the slug has collided with a *different* display name
+      ("Alice (v2)" vs "Alice v2" both slug to "Alice_v2"): append the
+      smallest numeric suffix that yields a free directory. This
+      prevents ``save_character`` from silently clobbering an unrelated
+      character's reference / embedding / thumbnail.
+    """
+    safe = _safe_name(display_name)
+    target_dir = os.path.join(base, safe)
+    if not os.path.exists(target_dir):
+        return target_dir
+
+    stored = _read_meta_name(os.path.join(target_dir, "meta.json"))
+    if stored is not None and stored.lower() == display_name.lower():
+        return target_dir
+
+    # Slug collision with a different display name — find a free
+    # numeric suffix.  Bounded loop so a corrupt library directory
+    # doesn't spin forever.
+    for suffix in range(1, 10_000):
+        candidate = os.path.join(base, f"{safe}_{suffix}")
+        if not os.path.exists(candidate):
+            return candidate
+        stored = _read_meta_name(os.path.join(candidate, "meta.json"))
+        if stored is not None and stored.lower() == display_name.lower():
+            return candidate
+    # Unreachable in practice — 10k colliding characters is a different
+    # problem than this function is trying to solve.
+    raise RuntimeError(
+        f"Could not find a free directory slug for '{display_name}' "
+        f"after 10000 attempts."
+    )
+
+
 def get_library_dir(root: Optional[str] = None) -> str:
     """Return (and create) the root directory for the character library."""
     path = root or os.environ.get("UFIG_CHARACTER_LIBRARY", _DEFAULT_DIR)
@@ -160,10 +213,19 @@ def save_character(
 
     ``overwrite=False`` raises ``FileExistsError`` if a directory with
     the sanitized name already exists.
+
+    Slug collisions (two distinct display names mapping to the same
+    ``_safe_name`` — e.g. "Alice (v2)" and "Alice v2" both sanitize to
+    "Alice_v2") are resolved by appending a numeric suffix to the
+    second character's directory rather than silently overwriting the
+    first. We treat "same display name" as the update path
+    (case-insensitive compare against the stored meta.json name), so
+    legitimate re-saves of an existing character still update the
+    original directory.
     """
-    safe = _safe_name(name)
+    display_name = (name or "").strip()
     base = get_library_dir(root)
-    target_dir = os.path.join(base, safe)
+    target_dir = _resolve_target_dir(base, display_name)
 
     with _LIBRARY_LOCK:
         if os.path.exists(target_dir) and not overwrite:
@@ -190,7 +252,7 @@ def save_character(
         np.save(emb_path, np.asarray(embedding, dtype=np.float32))
 
         meta = {
-            "name": name.strip() or safe,
+            "name": display_name or _safe_name(name),
             "created_at": time.time(),
             "source": source,
         }

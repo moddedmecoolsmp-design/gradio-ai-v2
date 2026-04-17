@@ -1997,6 +1997,20 @@ def render_video_frame(
         except Exception as exc:
             print(f"[Video Face Swap] Warning: Face swap failed: {exc}")
 
+    # Auto-swap from the saved Character Library — independent of the
+    # legacy single-source ``enable_faceswap`` path above so a user who
+    # has a library but no per-call faceswap_source_image still gets
+    # consistent identities across frames. Runs silently (and as a no-op)
+    # when the library is empty or the feature is disabled in the
+    # Face Swap tab.
+    try:
+        from src.image import faceswap_config as _fs_config
+
+        if _fs_config.get_config().auto_swap_from_library:
+            image = _fs_config.post_process_with_library(image, device=device)
+    except Exception as exc:
+        print(f"[Video Face Swap] library auto-swap skipped: {exc}")
+
     return image, mode
 
 
