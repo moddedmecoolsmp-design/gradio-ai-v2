@@ -70,6 +70,13 @@ class ImageGenerator:
         upscale_model: Optional[str] = None,
         upscale_target_scale: Optional[float] = None,
         upscale_tile: int = 512,
+        # Internal callers (e.g. the Klein Hi-Res LoRA upscale path in
+        # ``src/image/upscaler_ui.py``) reuse ``generate`` for its
+        # pipeline/LoRA/offload machinery but do *not* want the
+        # library-driven face swap to fire a second time on their output.
+        # Per-call opt-out so the outer generation keeps running face swap
+        # while the inner LoRA refine doesn't double-swap.
+        skip_face_swap: bool = False,
         progress_callback: Optional[Callable] = None,
     ):
         self.stop_requested = False
@@ -389,12 +396,20 @@ class ImageGenerator:
         # "Auto-swap saved characters" in the Face Swap tab, every generated
         # image is fed through inswapper so saved characters stay consistent
         # across Single / Batch / Video without manual per-output assignments.
-        try:
-            from src.image import faceswap_config
-            image = faceswap_config.post_process_with_library(image, device=device)
-        except Exception as _swap_exc:
-            # Library auto-swap is best-effort — never fails generation.
-            print(f"  [face-swap] library post-process skipped: {_swap_exc}")
+        if skip_face_swap:
+            # Internal caller (e.g. Klein Hi-Res LoRA refine) opted out —
+            # the outer generation already ran library auto-swap, so running
+            # it again would double-swap the same faces and visibly degrade
+            # identity + add ~1 s/face. Standalone Upscale-tab invocations
+            # likewise never asked for a swap.
+            print("  [face-swap] library post-process skipped (internal caller opted out).")
+        else:
+            try:
+                from src.image import faceswap_config
+                image = faceswap_config.post_process_with_library(image, device=device)
+            except Exception as _swap_exc:
+                # Library auto-swap is best-effort — never fails generation.
+                print(f"  [face-swap] library post-process skipped: {_swap_exc}")
 
         # Post-processing: optional upscaling. Runs after face-swap so the
         # upscaler cleans up any inswapper seam artifacts at the same time.

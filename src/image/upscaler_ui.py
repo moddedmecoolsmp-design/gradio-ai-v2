@@ -111,6 +111,18 @@ def _run_klein_hires_lora_upscale(
             img2img_strength=0.35,  # light refine — preserve content
             lora_file=lora_path,
             lora_strength=KLEIN_HIRES_LORA_STRENGTH,
+            # Suppress the inner generate()'s library-driven face swap.
+            # Two reasons:
+            #   - Inline path (Generate tab): the outer generate() already
+            #     ran post_process_with_library; running it again would
+            #     double-swap the same faces, degrading identity + adding
+            #     ~1 s/face.
+            #   - Standalone path (Upscale tab): the user clicked "Run
+            #     Upscale" on an arbitrary image — they never asked for a
+            #     face swap, so silently swapping faces because
+            #     auto-swap-from-library is globally enabled would be a
+            #     surprise behaviour change on their upload.
+            skip_face_swap=True,
             progress_callback=progress,
         )
         # ``generate`` returns (image, status_or_seed_info, …) — peel.
