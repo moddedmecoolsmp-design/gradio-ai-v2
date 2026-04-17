@@ -2656,6 +2656,17 @@ def generate_image(
     enable_optional_accelerators,
     preset_choice,
     enable_klein_anatomy_fix,
+    # Preservation (pose + facial expression reference) — all optional. If
+    # ``enable_preservation`` is False the other three are ignored.
+    enable_preservation=False,
+    preservation_input=None,
+    preservation_detector="dwpose",
+    preservation_mode="body_face",
+    # Upscale post-processing — run after face swap if enabled.
+    enable_upscale=False,
+    upscale_model=None,
+    upscale_target_scale=None,
+    upscale_tile=512,
     progress=gr.Progress()
 ):
     STOP_EVENT.clear()
@@ -2706,6 +2717,14 @@ def generate_image(
         enable_windows_compile_probe=enable_windows_compile_probe,
         enable_cuda_graphs=enable_cuda_graphs,
         enable_optional_accelerators=enable_optional_accelerators,
+        enable_preservation=enable_preservation,
+        preservation_input=preservation_input,
+        preservation_detector=preservation_detector,
+        preservation_mode=preservation_mode,
+        enable_upscale=enable_upscale,
+        upscale_model=upscale_model,
+        upscale_target_scale=upscale_target_scale,
+        upscale_tile=upscale_tile,
         progress_callback=progress,
     )
 

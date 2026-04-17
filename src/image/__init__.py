@@ -9,6 +9,9 @@ from .pulid_helper import MultiCharacterManager, PuLIDFluxPatch
 from .vlm_prompt_upsampler import upsample_prompt_from_image
 from .lora_zimage import load_lora_for_pipeline, list_lora_files
 from . import character_library
+from . import preservation
+from . import upscaler
+from . import upscaler_ui
 
 __all__ = [
     "get_pose_extractor",
@@ -24,4 +27,7 @@ __all__ = [
     "load_lora_for_pipeline",
     "list_lora_files",
     "character_library",
+    "preservation",
+    "upscaler",
+    "upscaler_ui",
 ]

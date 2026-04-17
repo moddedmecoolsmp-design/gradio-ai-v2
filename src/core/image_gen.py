@@ -54,6 +54,16 @@ class ImageGenerator:
         enable_windows_compile_probe: Optional[bool] = None,
         enable_cuda_graphs: Optional[bool] = None,
         enable_optional_accelerators: Optional[bool] = None,
+        # ---- Preservation (pose + expression from a reference image) ----
+        enable_preservation: bool = False,
+        preservation_input: Optional[Any] = None,
+        preservation_detector: str = "dwpose",
+        preservation_mode: str = "body_face",
+        # ---- Upscale (run after face-swap post-process) ----
+        enable_upscale: bool = False,
+        upscale_model: Optional[str] = None,
+        upscale_target_scale: Optional[float] = None,
+        upscale_tile: int = 512,
         progress_callback: Optional[Callable] = None,
     ):
         self.stop_requested = False
@@ -105,6 +115,37 @@ class ImageGenerator:
 
         if self.stop_requested:
             return None, "Cancelled by user.", None
+
+        # Preservation: extract pose + facial landmarks from preservation_input
+        # and prepend the skeleton to input_images so FLUX.2-klein conditions
+        # the generation on it. Also appends a short pose directive to the
+        # prompt. Silent no-op when disabled or when preservation_input is
+        # empty; silent degrade (generate without pose) when extraction fails.
+        preservation_status: Optional[str] = None
+        if enable_preservation and preservation_input is not None:
+            try:
+                from src.image.preservation import (
+                    augment_prompt_for_preservation,
+                    build_preservation_inputs,
+                )
+                preservation_pil = preservation_input
+                # Gallery items arrive as (image, caption) tuples — unwrap.
+                if isinstance(preservation_pil, (tuple, list)):
+                    preservation_pil = preservation_pil[0]
+                existing_refs = list(input_images) if input_images else None
+                augmented, _skeleton, preservation_status = build_preservation_inputs(
+                    preservation_pil,
+                    existing_input_images=existing_refs,
+                    device=device,
+                    detector=preservation_detector,
+                    mode=preservation_mode,
+                )
+                if augmented is not None:
+                    input_images = augmented
+                    prompt = augment_prompt_for_preservation(prompt)
+                print(f"  [preservation] {preservation_status}")
+            except Exception as _pres_exc:
+                print(f"  [preservation] skipped: {_pres_exc}")
 
         # LoRA Loading
         if lora_file:
@@ -298,8 +339,33 @@ class ImageGenerator:
             # Library auto-swap is best-effort — never fails generation.
             print(f"  [face-swap] library post-process skipped: {_swap_exc}")
 
+        # Post-processing: optional upscaling. Runs after face-swap so the
+        # upscaler cleans up any inswapper seam artifacts at the same time.
+        # Silent no-op when disabled; silent degrade (return pre-upscale
+        # image) when the upscaler can't load.
+        upscale_status: Optional[str] = None
+        if enable_upscale:
+            try:
+                from src.image.upscaler_ui import run_upscale
+                upscaled, upscale_status = run_upscale(
+                    image,
+                    model_key=upscale_model or "Real-ESRGAN x4plus",
+                    target_scale=upscale_target_scale,
+                    tile=int(upscale_tile) if upscale_tile else 512,
+                    device=device,
+                )
+                if upscaled is not None:
+                    image = upscaled
+                print(f"  [upscale] {upscale_status}")
+            except Exception as _ups_exc:
+                print(f"  [upscale] post-process skipped: {_ups_exc}")
+
         fallback_info = f" | Note: {self.pm.last_model_fallback_reason}" if self.pm.last_model_fallback_reason else ""
         status = f"Seed: {seed} | Mode: {mode_str} | Model: {current_model} | Device: {device}{fallback_info}"
+        if preservation_status:
+            status += f" | {preservation_status}"
+        if upscale_status:
+            status += f" | {upscale_status}"
         return image, status
 
     def _scale_dims(self, w, h, factor):

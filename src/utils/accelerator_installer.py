@@ -169,6 +169,69 @@ def _install_xformers() -> str:
     return "failed"
 
 
+def _install_preservation_stack() -> Dict[str, str]:
+    """
+    Install ``controlnet_aux`` for DWPose/OpenPose-based pose preservation.
+
+    ``controlnet_aux`` ships the DWposeDetector / OpenposeDetector classes
+    that ``src.image.pose_helper`` relies on. The package auto-downloads
+    its ONNX weights to the HuggingFace cache on first use, so once the
+    pip install completes no further bootstrap is needed.
+    """
+    results: Dict[str, str] = {}
+    if _module_importable("controlnet_aux"):
+        results["controlnet_aux"] = "present"
+        return results
+
+    ok, message = _pip_install(["controlnet_aux"])
+    results["controlnet_aux"] = (
+        "installed" if ok and _module_importable("controlnet_aux") else "failed"
+    )
+    if not ok:
+        print(f"  [accelerator-installer] controlnet_aux install skipped: {message}")
+    return results
+
+
+def _install_upscaler_stack() -> Dict[str, str]:
+    """
+    Install upscaler dependencies — prefer ``spandrel`` (universal arch
+    loader used by ChaiNNer / ComfyUI), fall back to ``basicsr`` which
+    ships the bare RRDBNet architecture Real-ESRGAN uses.
+
+    We try spandrel first because:
+      * it auto-detects the arch from a ``.pth`` file, so users can drop
+        in any ESRGAN / SwinIR / HAT checkpoint without a code change;
+      * it's a pure Python package with no CUDA build step.
+
+    If spandrel fails (rare — it's pure Python), we fall back to basicsr,
+    which is a heavier dependency but covers every Real-ESRGAN variant.
+    """
+    results: Dict[str, str] = {}
+    if _module_importable("spandrel"):
+        results["spandrel"] = "present"
+        return results
+
+    ok, message = _pip_install(["spandrel"])
+    if ok and _module_importable("spandrel"):
+        results["spandrel"] = "installed"
+        return results
+
+    print(f"  [accelerator-installer] spandrel install skipped: {message}")
+    results["spandrel"] = "failed"
+
+    # Fallback: basicsr (RRDBNet only, but battle-tested).
+    if _module_importable("basicsr"):
+        results["basicsr"] = "present"
+        return results
+    ok, message = _pip_install(["basicsr"])
+    results["basicsr"] = (
+        "installed" if ok and _module_importable("basicsr") else "failed"
+    )
+    if not ok:
+        print(f"  [accelerator-installer] basicsr install skipped: {message}")
+    return results
+
+
 def _install_face_swap_stack() -> Dict[str, str]:
     """
     Install the face-swap runtime stack if the user has toggled face swap
@@ -253,6 +316,15 @@ def auto_install_accelerators(device: Optional[str] = None) -> Dict[str, str]:
         # when everything is already present.
         print("  [accelerator-installer] first-run probe: checking face-swap stack...")
         _INSTALL_STATE.update(_install_face_swap_stack())
+
+        # Preservation (DWPose/OpenPose) + Upscaler (spandrel / basicsr). Both
+        # are small, pure-Python packages and their install never clobbers
+        # the user's torch build, so they run alongside the face-swap stack
+        # as part of the first-run probe regardless of platform.
+        print("  [accelerator-installer] first-run probe: checking preservation stack...")
+        _INSTALL_STATE.update(_install_preservation_stack())
+        print("  [accelerator-installer] first-run probe: checking upscaler stack...")
+        _INSTALL_STATE.update(_install_upscaler_stack())
 
         if not _should_attempt(device):
             _INSTALL_STATE.setdefault("sageattention", "skipped")
