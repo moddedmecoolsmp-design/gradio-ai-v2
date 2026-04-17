@@ -14,8 +14,9 @@ try:
 except Exception:
     sf = None
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Library modules must not call ``logging.basicConfig``; entry point owns
+# root logger configuration.  See ``src/audio/audio_separator.py`` for the
+# full rationale.
 logger = logging.getLogger(__name__)
 
 class QwenTTSHandler:

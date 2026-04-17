@@ -88,7 +88,10 @@ class AsyncImageLoader:
 
     async def load_image_async(self, path: str) -> Tuple[str, Optional[Image.Image]]:
         """Load single image asynchronously."""
-        loop = asyncio.get_event_loop()
+        # ``get_event_loop`` is deprecated when there is no running loop
+        # (Python 3.10+); inside ``async def`` we always have one so the
+        # documented replacement is ``get_running_loop``.
+        loop = asyncio.get_running_loop()
         img = await loop.run_in_executor(self.executor, self.load_image, path)
         return path, img
 
@@ -478,7 +481,17 @@ class AsyncBatchPipeline:
                     # Optimized context for RTX 3070: Use BFloat16 if supported, else Float16.
                     dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
                     def autocast_factory():
-                        model_key = process_kwargs.get("model_choice") or process_kwargs.get("model_key") or str(type(pipe))
+                        # ``should_enable_autocast`` matches ``model_key``
+                        # against known SDNQ/FLUX tags; falling back to
+                        # ``str(type(pipe))`` never matches and only added
+                        # noise. When neither ``model_choice`` nor
+                        # ``model_key`` is supplied, let the helper use its
+                        # pipe-based fallback by passing ``None`` explicitly.
+                        model_key = (
+                            process_kwargs.get("model_choice")
+                            or process_kwargs.get("model_key")
+                            or None
+                        )
                         if device == "cuda" and should_enable_autocast(device, model_key, pipe):
                             return torch.autocast(device_type="cuda", dtype=dtype)
                         return contextlib.nullcontext()

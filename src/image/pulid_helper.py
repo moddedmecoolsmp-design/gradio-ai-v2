@@ -3,23 +3,29 @@ PuLID-FLUX Helper for Character Consistency
 Optimized for 8GB VRAM (RTX 3070)
 """
 
+import os
+import json
+import threading
+from pathlib import Path
+from typing import Optional, Union, List
+
+import numpy as np
+import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 from PIL import Image
-import os
-import json
-from pathlib import Path
-import timm
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
-from typing import Optional, Union, List
 
 from src.constants import LEGACY_CHARACTER_MANAGER_STATE_FILENAME
 
-# Global cache for PuLID models
+# Global cache for PuLID models, keyed by ``{device}_{enable_fp8}``.
+# A lock guards the get-or-create path so two concurrent Gradio handlers
+# (e.g. a generation request and a Character Manager refresh) don't both
+# instantiate PuLID and double-allocate ~1.5 GB of VRAM.
 _pulid_cache = {}
+_pulid_cache_lock = threading.Lock()
 
 def get_memory_usage():
     """Get current CUDA memory usage in GB."""

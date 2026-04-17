@@ -1,9 +1,17 @@
 
 import os
+import threading
+
 import torch
 from insightface.app import FaceAnalysis
 
+# Module-level cache of FaceAnalysis instances keyed by ``{device}_{name}``.
+# A lock guards the get-or-create path so two concurrent Gradio request
+# handlers (face swap tab + inline post-gen scan, for example) don't both
+# enter the branch that downloads antelopev2 weights and builds the ORT
+# session at the same time on a cold cache.
 _face_analysis_cache = {}
+_face_analysis_cache_lock = threading.Lock()
 
 
 def _get_available_onnx_providers():
@@ -36,11 +44,17 @@ def resolve_onnx_providers(device: str = "cuda"):
 def get_face_analysis(device="cuda", name="antelopev2"):
     """
     Centralized provider for FaceAnalysis to save VRAM.
+    Thread-safe: concurrent callers for the same ``{device}_{name}`` key
+    share a single instance instead of racing to build two ORT sessions.
     """
     key = f"{device}_{name}"
-    if key not in _face_analysis_cache:
-        print(f"[FaceAnalysis] Initializing new instance: {name} on {device}")
+    with _face_analysis_cache_lock:
+        cached = _face_analysis_cache.get(key)
+        if cached is not None:
+            print(f"[FaceAnalysis] Reusing existing instance: {name} on {device}")
+            return cached
 
+        print(f"[FaceAnalysis] Initializing new instance: {name} on {device}")
         candidates = resolve_onnx_provider_candidates(device)
         errors = []
         for providers in candidates:
@@ -50,22 +64,16 @@ def get_face_analysis(device="cuda", name="antelopev2"):
                 app.prepare(ctx_id=ctx_id, det_size=(640, 640))
                 _face_analysis_cache[key] = app
                 print(f"[FaceAnalysis] Provider selected: {providers}")
-                break
+                return app
             except Exception as exc:
                 errors.append(f"{providers}: {exc}")
                 print(f"[FaceAnalysis] Provider probe failed: {providers} ({exc})")
-        else:
-            joined = " | ".join(errors[-3:]) if errors else "No providers available"
-            raise RuntimeError(f"Failed to initialize FaceAnalysis providers: {joined}")
-    else:
-        print(f"[FaceAnalysis] Reusing existing instance: {name} on {device}")
 
-    return _face_analysis_cache[key]
+        joined = " | ".join(errors[-3:]) if errors else "No providers available"
+        raise RuntimeError(f"Failed to initialize FaceAnalysis providers: {joined}")
 
 def unload_face_analysis():
-    global _face_analysis_cache
-    for key in list(_face_analysis_cache.keys()):
-        del _face_analysis_cache[key]
-    _face_analysis_cache = {}
+    with _face_analysis_cache_lock:
+        _face_analysis_cache.clear()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

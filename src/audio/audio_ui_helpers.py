@@ -3,8 +3,8 @@ import logging
 from typing import List, Tuple
 import gradio as gr
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Library modules must not call ``logging.basicConfig``; see the note in
+# ``src/audio/audio_separator.py``. Entry point owns root logger config.
 logger = logging.getLogger(__name__)
 
 # Try imports with graceful fallback

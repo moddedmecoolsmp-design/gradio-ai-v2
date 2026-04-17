@@ -513,28 +513,24 @@ def run_async_batch_processing(
 
     This function can be called from the existing synchronous code.
     """
-    # Check if event loop exists
+    # ``get_event_loop`` is deprecated when no loop is running (Python
+    # 3.10+) and will be removed in a future version.  Probe explicitly
+    # for a *running* loop instead: if there is one we must hop to a
+    # worker thread (asyncio.run refuses to nest), otherwise we create a
+    # fresh loop via ``asyncio.run``.
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Create new loop in thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    asyncio.run,
-                    process_batch_folder_async(
-                        image_paths=image_paths,
-                        pipe=pipe,
-                        device=device,
-                        output_folder=output_folder,
-                        progress_callback=progress_callback,
-                        **process_kwargs
-                    )
-                )
-                return future.result()
-        else:
-            # Use existing loop
-            return loop.run_until_complete(
+        asyncio.get_running_loop()
+        running = True
+    except RuntimeError:
+        running = False
+
+    if running:
+        # Create a new loop in a worker thread so we don't collide with
+        # the caller's running loop.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                asyncio.run,
                 process_batch_folder_async(
                     image_paths=image_paths,
                     pipe=pipe,
@@ -544,15 +540,15 @@ def run_async_batch_processing(
                     **process_kwargs
                 )
             )
-    except RuntimeError:
-        # No event loop, create new one
-        return asyncio.run(
-            process_batch_folder_async(
-                image_paths=image_paths,
-                pipe=pipe,
-                device=device,
-                output_folder=output_folder,
-                progress_callback=progress_callback,
-                **process_kwargs
-            )
+            return future.result()
+
+    return asyncio.run(
+        process_batch_folder_async(
+            image_paths=image_paths,
+            pipe=pipe,
+            device=device,
+            output_folder=output_folder,
+            progress_callback=progress_callback,
+            **process_kwargs
         )
+    )
