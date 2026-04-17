@@ -279,7 +279,10 @@ class UpscalerHelper:
 
             if self._model is not None:
                 # Free the previous model before loading a different one.
-                self.unload()
+                # Must call the unlocked helper — ``self._lock`` is a plain
+                # (non-reentrant) ``threading.Lock`` and re-entering it via
+                # ``self.unload()`` would deadlock.
+                self._unload_unlocked()
 
             spec = MODELS[model_key]
             weights_path = _download_weights(spec)
@@ -309,22 +312,32 @@ class UpscalerHelper:
             )
 
     # ------------------------------------------------------------------
+    def _unload_unlocked(self) -> None:
+        """Inner cleanup shared by ``unload()`` and ``load()``.
+
+        Assumes ``self._lock`` is already held by the caller. Kept as a
+        private helper so ``load()`` can reuse the cleanup path without
+        re-acquiring the non-reentrant ``threading.Lock`` (which would
+        deadlock).
+        """
+        if self._model is not None:
+            try:
+                self._model.to("cpu")
+            except Exception:
+                pass
+            del self._model
+        self._model = None
+        self._loaded_key = None
+        if self.device.startswith("cuda"):
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
     def unload(self) -> None:
         """Release the model and any CUDA memory it held."""
         with self._lock:
-            if self._model is not None:
-                try:
-                    self._model.to("cpu")
-                except Exception:
-                    pass
-                del self._model
-            self._model = None
-            self._loaded_key = None
-            if self.device.startswith("cuda"):
-                try:
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
+            self._unload_unlocked()
 
     # ------------------------------------------------------------------
     def upscale(
