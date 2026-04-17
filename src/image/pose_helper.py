@@ -43,7 +43,14 @@ class PoseExtractor:
         self.preprocessor = None
         
     def load_preprocessor(self):
-        """Load pose detection preprocessor (thread-safe)."""
+        """Load pose detection preprocessor (thread-safe).
+
+        Holds ``_pose_cache_lock`` across the entire check-then-load so
+        two concurrent requests can't both observe the cache as empty
+        and both fall through to ``from_pretrained``.  Loading is the
+        slow step, not the lookup — making it atomic with the check is
+        the whole point.
+        """
         if self.preprocessor is not None:
             return
 
@@ -54,25 +61,24 @@ class PoseExtractor:
                 self.preprocessor = cached
                 return
 
-        try:
-            from controlnet_aux import DWposeDetector, OpenposeDetector
+            try:
+                from controlnet_aux import DWposeDetector, OpenposeDetector
 
-            print(f"Loading {self.detector_type} pose detector...")
+                print(f"Loading {self.detector_type} pose detector...")
 
-            if self.detector_type == "dwpose":
-                # DWPose: More accurate, includes facial landmarks
-                self.preprocessor = DWposeDetector.from_pretrained("lllyasviel/Annotators")
-            else:
-                # OpenPose: Classic pose detector
-                self.preprocessor = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
-            with _pose_cache_lock:
+                if self.detector_type == "dwpose":
+                    # DWPose: More accurate, includes facial landmarks
+                    self.preprocessor = DWposeDetector.from_pretrained("lllyasviel/Annotators")
+                else:
+                    # OpenPose: Classic pose detector
+                    self.preprocessor = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
                 _pose_preprocessor_cache[cache_key] = self.preprocessor
-            print(f"  {self.detector_type} loaded successfully")
+                print(f"  {self.detector_type} loaded successfully")
 
-        except Exception as e:
-            print(f"  Warning: Failed to load {self.detector_type}: {e}")
-            print("  Pose preservation will not be available")
-            self.preprocessor = None
+            except Exception as e:
+                print(f"  Warning: Failed to load {self.detector_type}: {e}")
+                print("  Pose preservation will not be available")
+                self.preprocessor = None
     
     def extract_pose(self,
                     image: Image.Image,

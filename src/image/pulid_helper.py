@@ -187,10 +187,19 @@ class PuLIDHelper:
         if torch.cuda.is_available(): torch.cuda.empty_cache()
 
 def get_pulid_helper(device="cuda", enable_fp8=True):
+    """Get or create PuLIDHelper singleton (thread-safe).
+
+    Holds ``_pulid_cache_lock`` across the check-then-act so two
+    concurrent Gradio handlers can't both observe the cache as empty
+    and double-instantiate PuLID (+~1.5 GB VRAM).
+    """
     key = f"{device}_{enable_fp8}"
-    if key not in _pulid_cache:
-        _pulid_cache[key] = PuLIDHelper(device, enable_fp8)
-    return _pulid_cache[key]
+    with _pulid_cache_lock:
+        helper = _pulid_cache.get(key)
+        if helper is None:
+            helper = PuLIDHelper(device, enable_fp8)
+            _pulid_cache[key] = helper
+        return helper
 
 class MultiCharacterManager:
     """Manages character detection, clustering and embedding storage."""
