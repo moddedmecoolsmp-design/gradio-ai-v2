@@ -341,11 +341,14 @@ def create_batch_processor_func(
             output_path = os.path.join(output_dir, f"{base_name}_out.png")
             # Post-processing: apply library-driven face swap when the user
             # has enabled auto-swap in the Face Swap tab. A no-op otherwise.
+            # Must run before final_results.append so the returned list matches
+            # the saved files (mirrors single-image path in image_gen.py).
             try:
                 from src.image import faceswap_config
                 res = faceswap_config.post_process_with_library(res, device=device)
             except Exception as _swap_exc:
                 print(f"  [face-swap] batch library post-process skipped: {_swap_exc}")
+            final_results.append(res)
             await asyncio.to_thread(res.save, output_path)
             print(f"  [SAVED] {output_path}")
 
