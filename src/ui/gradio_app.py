@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any, Mapping
 from src.constants import BUILTIN_LORA_CHOICES
 from src.image import faceswap_config, faceswap_ui
+from src.image import upscaler as upscaler_helper
+from src.image import upscaler_ui
 
 def on_builtin_lora_change(builtin_lora):
     """Toggle file upload visibility based on built-in LoRA selection."""
@@ -181,6 +183,104 @@ def create_ui(context: Mapping[str, Any]):
                         output_image = gr.Image(
                             label="Generated Image", type="pil", format="png"
                         )
+                        send_to_upscaler_btn = gr.Button(
+                            "Send to Upscaler", size="sm", variant="secondary"
+                        )
+
+                        with gr.Accordion(
+                            "Preservation (pose + facial expression)", open=False
+                        ) as preservation_accordion:
+                            gr.Markdown(
+                                "Use an existing image as a pose + expression "
+                                "reference. The skeleton (body + face landmarks) "
+                                "is passed to the generator so the output mimics "
+                                "the reference's posture and expression while the "
+                                "prompt controls identity and scene."
+                            )
+                            preservation_enable = gr.Checkbox(
+                                label="Enable Preservation",
+                                value=False,
+                                info="When off, the preservation reference is ignored.",
+                            )
+                            preservation_input = gr.Image(
+                                label="Pose / Expression Reference",
+                                type="pil",
+                                sources=["upload", "clipboard"],
+                                height=200,
+                            )
+                            with gr.Row():
+                                preservation_detector = gr.Dropdown(
+                                    choices=["dwpose", "openpose"],
+                                    value="dwpose",
+                                    label="Detector",
+                                    info="DWPose is more accurate; OpenPose is a classical fallback.",
+                                )
+                                preservation_mode = gr.Dropdown(
+                                    choices=[
+                                        "body",
+                                        "body_face",
+                                        "body_face_hands",
+                                    ],
+                                    value="body_face",
+                                    label="Mode",
+                                    info="body_face includes facial expression landmarks.",
+                                )
+                            # Quality complement to DWPose: the Klein Face
+                            # Expression Transfer LoRA (Civitai v2658175)
+                            # skips skeleton extraction and instead relies
+                            # on a dual-image trigger phrase. Works stand-
+                            # alone or stacked on top of the DWPose path.
+                            # FLUX.2-klein only — silent no-op on Z-Image.
+                            enable_expression_transfer = gr.Checkbox(
+                                label="Klein Face Expression Transfer LoRA",
+                                value=False,
+                                info=(
+                                    "Loads the v2658175 LoRA and prepends its "
+                                    "trigger phrase. Expression-focused; "
+                                    "FLUX.2-klein only."
+                                ),
+                            )
+
+                        with gr.Accordion(
+                            "Upscale after generation", open=False
+                        ) as upscale_inline_accordion:
+                            gr.Markdown(
+                                "Run the selected Real-ESRGAN model on the "
+                                "generated image immediately after face swap. "
+                                "See the **Upscale** tab for standalone upscaling."
+                            )
+                            upscale_enable = gr.Checkbox(
+                                label="Enable Upscale",
+                                value=False,
+                                info="When off, the generated image is returned as-is.",
+                            )
+                            with gr.Row():
+                                upscale_model_inline = gr.Dropdown(
+                                    choices=upscaler_helper.get_all_model_choices(),
+                                    value=upscaler_helper.DEFAULT_MODEL,
+                                    label="Upscaler Model",
+                                    info=(
+                                        "Real-ESRGAN / UltraSharp: fast "
+                                        "(~1 s on 3070). Klein High-Res LoRA: "
+                                        "quality-first img2img refine (~5 s)."
+                                    ),
+                                )
+                                upscale_target_scale_inline = gr.Slider(
+                                    minimum=1.0,
+                                    maximum=4.0,
+                                    value=4.0,
+                                    step=0.5,
+                                    label="Target Scale",
+                                    info="Final multiplier vs. model's native scale.",
+                                )
+                            upscale_tile_inline = gr.Slider(
+                                minimum=128,
+                                maximum=1024,
+                                value=512,
+                                step=64,
+                                label="Tile Size (px)",
+                                info="Lower = less VRAM, more tiles per pass.",
+                            )
 
                         with gr.Accordion(
                             "Face Swap (post-processing)", open=False
@@ -443,6 +543,68 @@ def create_ui(context: Mapping[str, Any]):
                 faceswap_tab_status = gr.Textbox(
                     label="Library Status", interactive=False
                 )
+
+            # ==============================================================
+            # Tab — Upscale
+            # ==============================================================
+            with gr.TabItem("Upscale"):
+                gr.Markdown(
+                    """
+                    ### Upscale / Enhance
+
+                    Standalone upscaling using Real-ESRGAN family models. Weights
+                    auto-download on first use. Use **Send to Upscaler** on the
+                    Generate tab to pipe the current output here.
+                    """
+                )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        upscale_input_image = gr.Image(
+                            label="Input Image",
+                            type="pil",
+                            sources=["upload", "clipboard"],
+                            height=360,
+                        )
+                        upscale_model_tab = gr.Dropdown(
+                            choices=upscaler_helper.get_all_model_choices(),
+                            value=upscaler_helper.DEFAULT_MODEL,
+                            label="Upscaler Model",
+                            info=(
+                                "x4plus = general photos; anime = illustrations; "
+                                "UltraSharp = community favourite for detail."
+                            ),
+                        )
+                        upscale_target_scale_tab = gr.Slider(
+                            minimum=1.0,
+                            maximum=4.0,
+                            value=4.0,
+                            step=0.5,
+                            label="Target Scale",
+                            info="Final multiplier vs. model's native scale.",
+                        )
+                        upscale_tile_tab = gr.Slider(
+                            minimum=128,
+                            maximum=1024,
+                            value=512,
+                            step=64,
+                            label="Tile Size (px)",
+                            info="Lower = less VRAM. 512 is safe on 8 GB.",
+                        )
+                        upscale_run_btn = gr.Button(
+                            "Run Upscale", variant="primary"
+                        )
+                    with gr.Column(scale=1):
+                        upscale_output_image = gr.Image(
+                            label="Upscaled Image",
+                            type="pil",
+                            format="png",
+                            height=360,
+                        )
+                        upscale_status = gr.Textbox(
+                            label="Status",
+                            interactive=False,
+                            lines=2,
+                        )
 
             # ==============================================================
             # Tab 4 — Advanced
@@ -832,9 +994,43 @@ def create_ui(context: Mapping[str, Any]):
                 enable_optional_accelerators,
                 preset_choice,
                 enable_klein_anatomy_fix,
+                # Preservation (pose + facial expression reference)
+                preservation_enable,
+                preservation_input,
+                preservation_detector,
+                preservation_mode,
+                enable_expression_transfer,
+                # Upscale post-processing (inline)
+                upscale_enable,
+                upscale_model_inline,
+                upscale_target_scale_inline,
+                upscale_tile_inline,
             ],
             outputs=[output_image, seed_info],
             show_progress=True,
+        )
+
+        # --------------------------------------------------------------
+        # Upscale tab wiring
+        # --------------------------------------------------------------
+        upscale_run_btn.click(
+            fn=upscaler_ui.run_upscale,
+            inputs=[
+                upscale_input_image,
+                upscale_model_tab,
+                upscale_target_scale_tab,
+                upscale_tile_tab,
+                device,
+            ],
+            outputs=[upscale_output_image, upscale_status],
+            show_progress=True,
+        )
+        # "Send to Upscaler" copies the generated image into the Upscale
+        # tab's input so the user can click through in one step.
+        send_to_upscaler_btn.click(
+            fn=upscaler_ui.send_generated_to_upscaler,
+            inputs=[output_image],
+            outputs=[upscale_input_image],
         )
         generate_btn.click(
             fn=persist_ui_state,

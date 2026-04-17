@@ -54,6 +54,29 @@ class ImageGenerator:
         enable_windows_compile_probe: Optional[bool] = None,
         enable_cuda_graphs: Optional[bool] = None,
         enable_optional_accelerators: Optional[bool] = None,
+        # ---- Preservation (pose + expression from a reference image) ----
+        enable_preservation: bool = False,
+        preservation_input: Optional[Any] = None,
+        preservation_detector: str = "dwpose",
+        preservation_mode: str = "body_face",
+        # ---- Klein Face Expression Transfer LoRA (quality path) --------
+        # Complement to DWPose-based preservation: loads the Civitai
+        # v2658175 LoRA and prepends its dual-image trigger word. Works
+        # stand-alone (without enable_preservation) or stacked on top of
+        # the DWPose skeleton path.
+        enable_expression_transfer: bool = False,
+        # ---- Upscale (run after face-swap post-process) ----
+        enable_upscale: bool = False,
+        upscale_model: Optional[str] = None,
+        upscale_target_scale: Optional[float] = None,
+        upscale_tile: int = 512,
+        # Internal callers (e.g. the Klein Hi-Res LoRA upscale path in
+        # ``src/image/upscaler_ui.py``) reuse ``generate`` for its
+        # pipeline/LoRA/offload machinery but do *not* want the
+        # library-driven face swap to fire a second time on their output.
+        # Per-call opt-out so the outer generation keeps running face swap
+        # while the inner LoRA refine doesn't double-swap.
+        skip_face_swap: bool = False,
         progress_callback: Optional[Callable] = None,
     ):
         self.stop_requested = False
@@ -89,6 +112,14 @@ class ImageGenerator:
 
         pipe = self.pm.load_pipeline(model_choice, device)
         current_model = self.pm.current_model
+        # Capture fallback reason immediately: the inline-upscale path may
+        # recurse into ``generate()`` (Klein Hi-Res LoRA refine calls
+        # ``gen.generate(model_choice=LOW_VRAM_FLUX_MODEL_CHOICE, ...)``),
+        # and that inner ``load_pipeline`` overwrites
+        # ``self.pm.last_model_fallback_reason``. If we read it only at
+        # status-string build time we would surface the inner SDNQ load's
+        # fallback reason (or clobber the user's real one with ``None``).
+        fallback_reason = self.pm.last_model_fallback_reason
 
         # Clamp step count for distilled models. FLUX.2 [klein] and Z-Image
         # Turbo are 4-step-distilled: quality plateaus at ~4 steps and any
@@ -106,6 +137,44 @@ class ImageGenerator:
         if self.stop_requested:
             return None, "Cancelled by user.", None
 
+        # Preservation: extract pose + facial landmarks from preservation_input
+        # and prepend the skeleton to input_images so FLUX.2-klein conditions
+        # the generation on it. Also appends a short pose directive to the
+        # prompt. Silent no-op when disabled or when preservation_input is
+        # empty; silent degrade (generate without pose) when extraction fails.
+        preservation_status: Optional[str] = None
+        if enable_preservation and preservation_input is not None:
+            try:
+                from src.image.preservation import (
+                    augment_prompt_for_preservation,
+                    build_preservation_inputs,
+                )
+                preservation_pil = preservation_input
+                # Gallery items arrive as (image, caption) tuples — unwrap.
+                if isinstance(preservation_pil, (tuple, list)):
+                    preservation_pil = preservation_pil[0]
+                existing_refs = list(input_images) if input_images else None
+                augmented, _skeleton, preservation_status = build_preservation_inputs(
+                    preservation_pil,
+                    existing_input_images=existing_refs,
+                    device=device,
+                    detector=preservation_detector,
+                    mode=preservation_mode,
+                )
+                # Only augment the prompt when a skeleton was actually
+                # extracted. ``build_preservation_inputs`` returns the
+                # original (possibly non-empty) ``existing_input_images``
+                # list even when extraction fails, so checking
+                # ``augmented is not None`` is insufficient — we'd promise
+                # the model a pose skeleton that isn't in the refs and
+                # confuse it. Gate on ``_skeleton`` directly.
+                if _skeleton is not None:
+                    input_images = augmented
+                    prompt = augment_prompt_for_preservation(prompt)
+                print(f"  [preservation] {preservation_status}")
+            except Exception as _pres_exc:
+                print(f"  [preservation] skipped: {_pres_exc}")
+
         # LoRA Loading
         if lora_file:
             self.pm.load_lora(lora_file, lora_strength, device)
@@ -113,6 +182,50 @@ class ImageGenerator:
         if enable_klein_anatomy_fix and "flux2-klein" in current_model:
             if os.path.exists(self.pm.klein_anatomy_lora_path):
                 self.pm.load_lora(self.pm.klein_anatomy_lora_path, 0.8, device)
+
+        # Klein Face Expression Transfer LoRA — quality complement to the
+        # DWPose preservation path. Auto-downloads on first use, loads at
+        # the Civitai-recommended 1.0 strength, and prepends its dual-
+        # image trigger phrase so the model knows which reference slot
+        # holds the expression to copy. Silent no-op on non-Klein models
+        # (the LoRA weights don't map onto Z-Image / SDXL layers).
+        if enable_expression_transfer and "flux2-klein" in current_model:
+            try:
+                from src.constants import (
+                    KLEIN_EXPRESSION_LORA_STRENGTH,
+                    KLEIN_EXPRESSION_LORA_TRIGGER,
+                )
+
+                expr_path = self.pm.ensure_builtin_lora_downloaded(
+                    "klein_expression", progress_callback
+                )
+                if expr_path and os.path.exists(expr_path):
+                    # PipelineManager.load_lora only holds one LoRA at
+                    # a time — a subsequent call unloads whatever was
+                    # loaded before. Warn the user when the expression
+                    # transfer LoRA is about to displace a previously
+                    # loaded adapter (their custom upload, or the
+                    # Anatomy Quality Fixer) so they aren't surprised
+                    # that the prior LoRA's effect disappeared.  A
+                    # proper multi-adapter stack is tracked as a
+                    # follow-up in load_lora itself.
+                    prev = getattr(self.pm, "current_lora_path", None)
+                    if prev:
+                        print(
+                            "  [expression-transfer] warning: replacing "
+                            f"previously loaded LoRA '{os.path.basename(prev)}'. "
+                            "PipelineManager only supports one LoRA at a time; "
+                            "disable Klein Anatomy Fix or your custom LoRA if "
+                            "you want to keep it active alongside expression "
+                            "transfer."
+                        )
+                    self.pm.load_lora(expr_path, KLEIN_EXPRESSION_LORA_STRENGTH, device)
+                    # Prepend the trigger phrase only once — users may
+                    # already have authored it into their prompt.
+                    if KLEIN_EXPRESSION_LORA_TRIGGER.lower() not in (prompt or "").lower():
+                        prompt = f"{KLEIN_EXPRESSION_LORA_TRIGGER}. {prompt}"
+            except Exception as _expr_exc:
+                print(f"  [expression-transfer] skipped: {_expr_exc}")
 
         # 6. Generation Parameters
         if seed == -1:
@@ -240,6 +353,16 @@ class ImageGenerator:
                         flux_kwargs["guidance_scale"] = final_guidance
                         flux_kwargs["generator"] = generator
                         flux_kwargs["num_images_per_prompt"] = 1
+                        # Forward ``img2img_strength`` to the FLUX img2img
+                        # pipeline. Without this the Klein Hi-Res LoRA upscale
+                        # (which passes 0.35 for a light refine) silently
+                        # runs at the pipeline default (~0.8–1.0) and heavily
+                        # regenerates the image instead of preserving content.
+                        # Guard by signature because not every FLUX-family
+                        # pipeline exposes ``strength``.
+                        flux_params = self._cached_pipe_params or {}
+                        if "strength" in flux_params:
+                            flux_kwargs["strength"] = float(img2img_strength)
                         # Only pass height/width if they match the image dims
                         # after pipeline's internal alignment (multiples of 16)
                         aligned_w = (img_w // 16) * 16
@@ -291,15 +414,48 @@ class ImageGenerator:
         # "Auto-swap saved characters" in the Face Swap tab, every generated
         # image is fed through inswapper so saved characters stay consistent
         # across Single / Batch / Video without manual per-output assignments.
-        try:
-            from src.image import faceswap_config
-            image = faceswap_config.post_process_with_library(image, device=device)
-        except Exception as _swap_exc:
-            # Library auto-swap is best-effort — never fails generation.
-            print(f"  [face-swap] library post-process skipped: {_swap_exc}")
+        if skip_face_swap:
+            # Internal caller (e.g. Klein Hi-Res LoRA refine) opted out —
+            # the outer generation already ran library auto-swap, so running
+            # it again would double-swap the same faces and visibly degrade
+            # identity + add ~1 s/face. Standalone Upscale-tab invocations
+            # likewise never asked for a swap.
+            print("  [face-swap] library post-process skipped (internal caller opted out).")
+        else:
+            try:
+                from src.image import faceswap_config
+                image = faceswap_config.post_process_with_library(image, device=device)
+            except Exception as _swap_exc:
+                # Library auto-swap is best-effort — never fails generation.
+                print(f"  [face-swap] library post-process skipped: {_swap_exc}")
 
-        fallback_info = f" | Note: {self.pm.last_model_fallback_reason}" if self.pm.last_model_fallback_reason else ""
+        # Post-processing: optional upscaling. Runs after face-swap so the
+        # upscaler cleans up any inswapper seam artifacts at the same time.
+        # Silent no-op when disabled; silent degrade (return pre-upscale
+        # image) when the upscaler can't load.
+        upscale_status: Optional[str] = None
+        if enable_upscale:
+            try:
+                from src.image.upscaler_ui import run_upscale
+                upscaled, upscale_status = run_upscale(
+                    image,
+                    model_key=upscale_model or "Real-ESRGAN x4plus",
+                    target_scale=upscale_target_scale,
+                    tile=int(upscale_tile) if upscale_tile else 512,
+                    device=device,
+                )
+                if upscaled is not None:
+                    image = upscaled
+                print(f"  [upscale] {upscale_status}")
+            except Exception as _ups_exc:
+                print(f"  [upscale] post-process skipped: {_ups_exc}")
+
+        fallback_info = f" | Note: {fallback_reason}" if fallback_reason else ""
         status = f"Seed: {seed} | Mode: {mode_str} | Model: {current_model} | Device: {device}{fallback_info}"
+        if preservation_status:
+            status += f" | {preservation_status}"
+        if upscale_status:
+            status += f" | {upscale_status}"
         return image, status
 
     def _scale_dims(self, w, h, factor):

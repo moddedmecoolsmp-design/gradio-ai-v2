@@ -197,7 +197,10 @@ APP_TEMP_DIR = os.environ.get("UFIG_TEMP_DIR", os.environ.get("GRADIO_TEMP_DIR")
 if APP_TEMP_DIR:
     tempfile.tempdir = APP_TEMP_DIR
 
-KLEIN_ANATOMY_LORA_PATH = os.path.join(LORAS_DIR, "kleinSliderAnatomy.safetensors")
+# Klein Anatomy Quality Fixer — 4B build.  Filename is suffixed so existing
+# installs with the old 9B weights don't short-circuit the download guard.
+# PipelineManager.__init__ also removes the un-suffixed legacy file.
+KLEIN_ANATOMY_LORA_PATH = os.path.join(LORAS_DIR, "kleinSliderAnatomy_4b.safetensors")
 
 
 
@@ -2670,6 +2673,22 @@ def generate_image(
     enable_optional_accelerators,
     preset_choice,
     enable_klein_anatomy_fix,
+    # Preservation (pose + facial expression reference) — all optional. If
+    # ``enable_preservation`` is False the other three are ignored.
+    enable_preservation=False,
+    preservation_input=None,
+    preservation_detector="dwpose",
+    preservation_mode="body_face",
+    # Face Expression Transfer LoRA — optional quality complement to the
+    # DWPose-skeleton preservation path. Toggling this independent of
+    # ``enable_preservation`` is intentional (the LoRA can be used alone
+    # with two reference images dropped into the standard img2img path).
+    enable_expression_transfer=False,
+    # Upscale post-processing — run after face swap if enabled.
+    enable_upscale=False,
+    upscale_model=None,
+    upscale_target_scale=None,
+    upscale_tile=512,
     progress=gr.Progress()
 ):
     STOP_EVENT.clear()
@@ -2687,6 +2706,8 @@ def generate_image(
         # Map dropdown display value to internal key
         lora_key_map = {
             "Klein Anatomy Fix": "klein_anatomy",
+            "Klein High-Resolution (upscale LoRA)": "klein_hires",
+            "Klein Face Expression Transfer": "klein_expression",
             "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
             "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
         }
@@ -2720,6 +2741,15 @@ def generate_image(
         enable_windows_compile_probe=enable_windows_compile_probe,
         enable_cuda_graphs=enable_cuda_graphs,
         enable_optional_accelerators=enable_optional_accelerators,
+        enable_preservation=enable_preservation,
+        preservation_input=preservation_input,
+        preservation_detector=preservation_detector,
+        preservation_mode=preservation_mode,
+        enable_expression_transfer=enable_expression_transfer,
+        enable_upscale=enable_upscale,
+        upscale_model=upscale_model,
+        upscale_target_scale=upscale_target_scale,
+        upscale_tile=upscale_tile,
         progress_callback=progress,
     )
 
@@ -2764,6 +2794,8 @@ def batch_process_folder(
         # Map dropdown display value to internal key
         lora_key_map = {
             "Klein Anatomy Fix": "klein_anatomy",
+            "Klein High-Resolution (upscale LoRA)": "klein_hires",
+            "Klein Face Expression Transfer": "klein_expression",
             "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
             "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
         }
@@ -2872,6 +2904,8 @@ def process_video(
         # Map dropdown display value to internal key
         lora_key_map = {
             "Klein Anatomy Fix": "klein_anatomy",
+            "Klein High-Resolution (upscale LoRA)": "klein_hires",
+            "Klein Face Expression Transfer": "klein_expression",
             "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
             "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
         }
