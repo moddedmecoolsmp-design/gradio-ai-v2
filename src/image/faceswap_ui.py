@@ -173,7 +173,10 @@ def apply_face_swap(
         slot_character = slot_values[slot_idx * 2 + 1]
         resolved = _resolve_slot_source(slot_image, slot_character)
         if resolved is not None:
-            assignments[slot_idx] = resolved
+            # Key by DetectedFace.index — NOT slot_idx — so swap_many targets
+            # the correct face even if detect_faces skipped a degenerate bbox
+            # (gaps in the index sequence would otherwise cause off-by-one).
+            assignments[detected_state[slot_idx].index] = resolved
 
     if not assignments:
         return (
@@ -223,6 +226,35 @@ def refresh_character_library() -> Tuple[Any, ...]:
     return (_gr_update(value=_character_gallery_value()), *dropdown_updates)
 
 
+def _crop_reference_around_face(
+    image: Image.Image,
+    bbox: Tuple[int, int, int, int],
+    expand: float = 1.75,
+) -> Image.Image:
+    """
+    Crop ``image`` to a region centered on ``bbox`` expanded by ``expand``
+    (e.g. 1.75 = 75% larger on each side).
+
+    The crop keeps surrounding context (hairline, chin, ears) for inswapper
+    to work well, while guaranteeing the stored reference contains only
+    the intended face — not any other face from a multi-face generation.
+    """
+    x1, y1, x2, y2 = bbox
+    w = x2 - x1
+    h = y2 - y1
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    half_w = w * expand / 2.0
+    half_h = h * expand / 2.0
+    nx1 = int(max(0, cx - half_w))
+    ny1 = int(max(0, cy - half_h))
+    nx2 = int(min(image.width, cx + half_w))
+    ny2 = int(min(image.height, cy + half_h))
+    if nx2 <= nx1 or ny2 <= ny1:
+        return image
+    return image.crop((nx1, ny1, nx2, ny2))
+
+
 def save_detected_face_as_character(
     slot_idx: int,
     name: str,
@@ -233,10 +265,12 @@ def save_detected_face_as_character(
     """
     Persist the detected face at ``slot_idx`` as a named character.
 
-    The *reference image* stored for inswapper is the full generated
-    image (not just the crop) because inswapper needs a clean face
-    with surrounding context for the best swap — the cropped thumbnail
-    is kept as the preview only.
+    The *reference image* stored is cropped to a generous region around
+    the selected face — NOT the entire generated image. Storing the full
+    multi-face image would cause ``swap_many`` to pick the largest face
+    in the reference when reusing the character, which may not be the
+    face the user picked. The crop includes enough padding for inswapper
+    to have hairline/chin/ear context.
     """
     if last_output_image is None:
         return "No generated image to save from."
@@ -249,10 +283,11 @@ def save_detected_face_as_character(
         return "Enter a character name before saving."
 
     face = detected_state[slot_idx]
+    reference_crop = _crop_reference_around_face(last_output_image, face.bbox)
     try:
         character_library.save_character(
             name,
-            reference_image=last_output_image,
+            reference_image=reference_crop,
             thumbnail=face.thumbnail,
             embedding=face.embedding,
             source="generated",
