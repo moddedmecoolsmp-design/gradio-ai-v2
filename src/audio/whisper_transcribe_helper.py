@@ -30,7 +30,6 @@ try:
 except Exception:
     whisperx = None
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
