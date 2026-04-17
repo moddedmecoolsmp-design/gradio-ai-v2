@@ -63,6 +63,15 @@ def _run_klein_hires_lora_upscale(
             KLEIN_HIRES_LORA_STRENGTH,
             KLEIN_HIRES_LORA_TRIGGER,
         )
+        # Route through the canonical 4-bit SDNQ model_choice constant.
+        # A previous revision hard-coded the string "FLUX.2 [klein] 4B
+        # (SDNQ Int4)" which doesn't match any entry in
+        # ``runtime_policies.MODEL_CHOICES`` — ``load_pipeline`` then
+        # fell through the dispatch chain and loaded the Int8 build
+        # while ``get_model_repos_for_choice`` downloaded SDNQ repos,
+        # a mismatch that OOMs low-VRAM users. Using the constant
+        # keeps them in lock-step.
+        from src.runtime_policies import LOW_VRAM_FLUX_MODEL_CHOICE
 
         lora_path = pm.ensure_builtin_lora_downloaded("klein_hires", progress)
         if not lora_path:
@@ -97,7 +106,7 @@ def _run_klein_hires_lora_upscale(
             seed=-1,
             guidance=1.0,
             device=device,
-            model_choice="FLUX.2 [klein] 4B (SDNQ Int4)",
+            model_choice=LOW_VRAM_FLUX_MODEL_CHOICE,
             input_images=[upscaled_input],
             img2img_strength=0.35,  # light refine — preserve content
             lora_file=lora_path,

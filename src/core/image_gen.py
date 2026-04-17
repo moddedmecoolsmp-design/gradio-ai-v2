@@ -185,6 +185,25 @@ class ImageGenerator:
                     "klein_expression", progress_callback
                 )
                 if expr_path and os.path.exists(expr_path):
+                    # PipelineManager.load_lora only holds one LoRA at
+                    # a time — a subsequent call unloads whatever was
+                    # loaded before. Warn the user when the expression
+                    # transfer LoRA is about to displace a previously
+                    # loaded adapter (their custom upload, or the
+                    # Anatomy Quality Fixer) so they aren't surprised
+                    # that the prior LoRA's effect disappeared.  A
+                    # proper multi-adapter stack is tracked as a
+                    # follow-up in load_lora itself.
+                    prev = getattr(self.pm, "current_lora_path", None)
+                    if prev:
+                        print(
+                            "  [expression-transfer] warning: replacing "
+                            f"previously loaded LoRA '{os.path.basename(prev)}'. "
+                            "PipelineManager only supports one LoRA at a time; "
+                            "disable Klein Anatomy Fix or your custom LoRA if "
+                            "you want to keep it active alongside expression "
+                            "transfer."
+                        )
                     self.pm.load_lora(expr_path, KLEIN_EXPRESSION_LORA_STRENGTH, device)
                     # Prepend the trigger phrase only once — users may
                     # already have authored it into their prompt.
