@@ -353,6 +353,16 @@ class ImageGenerator:
                         flux_kwargs["guidance_scale"] = final_guidance
                         flux_kwargs["generator"] = generator
                         flux_kwargs["num_images_per_prompt"] = 1
+                        # Forward ``img2img_strength`` to the FLUX img2img
+                        # pipeline. Without this the Klein Hi-Res LoRA upscale
+                        # (which passes 0.35 for a light refine) silently
+                        # runs at the pipeline default (~0.8–1.0) and heavily
+                        # regenerates the image instead of preserving content.
+                        # Guard by signature because not every FLUX-family
+                        # pipeline exposes ``strength``.
+                        flux_params = self._cached_pipe_params or {}
+                        if "strength" in flux_params:
+                            flux_kwargs["strength"] = float(img2img_strength)
                         # Only pass height/width if they match the image dims
                         # after pipeline's internal alignment (multiples of 16)
                         aligned_w = (img_w // 16) * 16
