@@ -349,7 +349,7 @@ class FaceSwapHelper:
         target_image: Image.Image,
         *,
         similarity_threshold: float = 0.35,
-        max_faces: int = MAX_FACE_SLOTS if False else 8,
+        max_faces: int = 8,
     ) -> Tuple[Image.Image, List[str]]:
         """
         Post-process ``target_image`` by swapping every detected face whose
