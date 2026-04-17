@@ -125,6 +125,20 @@ def _run_klein_hires_lora_upscale(
             skip_face_swap=True,
             progress_callback=progress,
         )
+        # Strip the Hi-Res LoRA from the shared pipeline before returning.
+        # Without this, ``pm.current_lora_path`` still references the Klein
+        # Hi-Res LoRA (strength 0.9, trigger word "High resolution") and
+        # leaks into the *next* outer ``generate()`` call whenever the
+        # user doesn't pass ``lora_file=`` / ``enable_klein_anatomy_fix=`` /
+        # ``enable_expression_transfer=`` (both ``image_gen.generate`` and
+        # ``pipeline_manager.load_pipeline`` short-circuit when the model
+        # doesn't change, so no implicit cleanup happens). Unload here so
+        # the upscaler is a hermetic post-processing step.
+        try:
+            pm.unload_lora()
+        except Exception:
+            # Best-effort — never fail the upscale because cleanup hiccuped.
+            pass
         # ``generate`` returns (image, status_or_seed_info, …) — peel.
         if isinstance(result, tuple) and len(result) >= 1:
             out_img = result[0]
