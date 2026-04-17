@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 from src.constants import BUILTIN_LORA_CHOICES
+from src.image import faceswap_ui
 
 def on_builtin_lora_change(builtin_lora):
     """Toggle file upload visibility based on built-in LoRA selection."""
@@ -181,6 +182,95 @@ def create_ui(context: Mapping[str, Any]):
                             label="Generated Image", type="pil", format="png"
                         )
 
+                        with gr.Accordion(
+                            "Face Swap (post-processing)", open=False
+                        ) as face_swap_accordion:
+                            gr.Markdown(
+                                "Scan the generated image for faces, then assign a "
+                                "source face to each detected face. Runs the "
+                                "InsightFace **inswapper_128** model on CUDA when "
+                                "available."
+                            )
+                            face_swap_enable = gr.Checkbox(
+                                label="Enable Face Swap",
+                                value=False,
+                                info="When off, Apply is a no-op.",
+                            )
+                            with gr.Row():
+                                face_scan_btn = gr.Button(
+                                    "Scan Faces in Generated Image",
+                                    variant="secondary",
+                                )
+                                face_apply_btn = gr.Button(
+                                    "Apply Face Swap", variant="primary"
+                                )
+                            face_swap_status = gr.Textbox(
+                                label="Status",
+                                interactive=False,
+                                lines=2,
+                            )
+
+                            # Pre-allocate per-face slots. Only the first N are
+                            # made visible after a scan (where N = number of
+                            # detected faces). Each slot has a thumbnail, a
+                            # source-image uploader, a saved-character picker,
+                            # and a "save detected face" shortcut.
+                            face_slot_rows = []
+                            face_slot_thumbnails = []
+                            face_slot_source_images = []
+                            face_slot_character_pickers = []
+                            face_slot_save_names = []
+                            face_slot_save_buttons = []
+                            for slot_idx in range(faceswap_ui.MAX_FACE_SLOTS):
+                                with gr.Row(visible=False) as slot_row:
+                                    thumb = gr.Image(
+                                        label=f"Detected Face #{slot_idx + 1}",
+                                        type="pil",
+                                        interactive=False,
+                                        height=160,
+                                    )
+                                    source_img = gr.Image(
+                                        label=f"Swap To (Source #{slot_idx + 1})",
+                                        type="pil",
+                                        sources=["upload", "clipboard"],
+                                        height=160,
+                                    )
+                                    with gr.Column():
+                                        char_pick = gr.Dropdown(
+                                            choices=["(none)"],
+                                            value="(none)",
+                                            label="Saved Character",
+                                            info=(
+                                                "Use a saved character as the "
+                                                "source instead of uploading."
+                                            ),
+                                        )
+                                        save_name = gr.Textbox(
+                                            label="Save Detected Face As",
+                                            placeholder="Name (e.g. Alice)",
+                                            lines=1,
+                                        )
+                                        save_btn = gr.Button(
+                                            f"Save Face #{slot_idx + 1} to Library",
+                                            size="sm",
+                                        )
+                                face_slot_rows.append(slot_row)
+                                face_slot_thumbnails.append(thumb)
+                                face_slot_source_images.append(source_img)
+                                face_slot_character_pickers.append(char_pick)
+                                face_slot_save_names.append(save_name)
+                                face_slot_save_buttons.append(save_btn)
+
+                            gr.Markdown(
+                                "Manage saved characters in the **Face Swap** tab."
+                            )
+
+                        # State objects for the face-swap workflow. Detected
+                        # faces are stashed here so the Apply handler knows the
+                        # number and order of faces without re-running the
+                        # detector.
+                        face_detected_state = gr.State([])
+
                 gr.Examples(
                     examples=[
                         ["A majestic mountain landscape at sunset, dramatic lighting, cinematic"],
@@ -278,7 +368,84 @@ def create_ui(context: Mapping[str, Any]):
                 )
 
             # ==============================================================
-            # Tab 3 — Advanced
+            # Tab 3 — Face Swap
+            # ==============================================================
+            with gr.TabItem("Face Swap"):
+                gr.Markdown(
+                    """
+                    ### Face Swap & Character Library
+
+                    Save a reference face once, and have it automatically swapped
+                    onto every face it matches across Single, Batch, and Video
+                    generations. Uses the InsightFace **inswapper_128** ONNX
+                    model on CUDA when available.
+
+                    The *per-image* scan (under the Generate tab's output)
+                    lets you override any detected face manually, even without
+                    a library entry.
+                    """
+                )
+                with gr.Row():
+                    faceswap_auto_enable = gr.Checkbox(
+                        label="Auto-swap saved characters on every generation",
+                        value=False,
+                        info=(
+                            "When on, every Single / Batch / Video output runs "
+                            "through inswapper and any detected face whose "
+                            "embedding matches a saved character is replaced."
+                        ),
+                    )
+                    faceswap_similarity_threshold = gr.Slider(
+                        minimum=0.15,
+                        maximum=0.85,
+                        value=0.35,
+                        step=0.05,
+                        label="Match Threshold",
+                        info=(
+                            "Cosine similarity cutoff. Lower = more aggressive "
+                            "matches (may swap unrelated faces). Higher = "
+                            "stricter (may miss the same character at "
+                            "different angles)."
+                        ),
+                    )
+                gr.Markdown("#### Saved Characters")
+                character_gallery = gr.Gallery(
+                    label="Saved Characters",
+                    value=[],
+                    columns=4,
+                    height="auto",
+                    interactive=False,
+                )
+                with gr.Row():
+                    char_upload_name = gr.Textbox(
+                        label="New Character Name",
+                        placeholder="e.g. Alice",
+                        lines=1,
+                    )
+                    char_upload_image = gr.Image(
+                        label="Reference Photo",
+                        type="pil",
+                        sources=["upload", "clipboard"],
+                        height=200,
+                    )
+                with gr.Row():
+                    char_save_btn = gr.Button(
+                        "Save New Character", variant="primary"
+                    )
+                    char_refresh_btn = gr.Button("Refresh Library")
+                with gr.Row():
+                    char_delete_name = gr.Textbox(
+                        label="Delete Character By Name",
+                        placeholder="Name to delete",
+                        lines=1,
+                    )
+                    char_delete_btn = gr.Button("Delete", variant="stop")
+                faceswap_tab_status = gr.Textbox(
+                    label="Library Status", interactive=False
+                )
+
+            # ==============================================================
+            # Tab 4 — Advanced
             # ==============================================================
             with gr.TabItem("Advanced"):
                 gr.Markdown(
@@ -789,6 +956,126 @@ def create_ui(context: Mapping[str, Any]):
             inputs=[sep_input, sep_num_speakers, sep_hf_token],
             outputs=[sep_output, sep_status],
             show_progress=True,
+        )
+
+        # ==============================================================
+        # Face Swap (post-generation) wiring
+        # ==============================================================
+        # Flat list of (row_visible, thumbnail_value) pairs so the scan
+        # handler can update every slot in one Gradio response.
+        face_slot_flat_outputs: list = []
+        for slot_idx in range(faceswap_ui.MAX_FACE_SLOTS):
+            face_slot_flat_outputs.append(face_slot_rows[slot_idx])
+            face_slot_flat_outputs.append(face_slot_thumbnails[slot_idx])
+
+        face_scan_btn.click(
+            fn=faceswap_ui.scan_output_for_faces,
+            inputs=[output_image, device],
+            outputs=face_slot_flat_outputs + [face_detected_state, face_swap_status],
+        )
+
+        # Flat list of (source_image, character_picker) pairs fed to
+        # the apply handler in slot order.
+        apply_slot_inputs: list = []
+        for slot_idx in range(faceswap_ui.MAX_FACE_SLOTS):
+            apply_slot_inputs.append(face_slot_source_images[slot_idx])
+            apply_slot_inputs.append(face_slot_character_pickers[slot_idx])
+
+        face_apply_btn.click(
+            fn=faceswap_ui.apply_face_swap,
+            inputs=(
+                [
+                    face_swap_enable,
+                    output_image,
+                    face_detected_state,
+                    device,
+                ]
+                + apply_slot_inputs
+            ),
+            outputs=[output_image, face_swap_status],
+            show_progress=True,
+        )
+
+        # "Save this detected face to the library" per-slot wiring.
+        for slot_idx in range(faceswap_ui.MAX_FACE_SLOTS):
+            face_slot_save_buttons[slot_idx].click(
+                fn=lambda name, img, state, dev, idx=slot_idx: (
+                    faceswap_ui.save_detected_face_as_character(
+                        idx, name, img, state, dev
+                    )
+                ),
+                inputs=[
+                    face_slot_save_names[slot_idx],
+                    output_image,
+                    face_detected_state,
+                    device,
+                ],
+                outputs=[face_swap_status],
+            ).then(
+                fn=faceswap_ui.refresh_character_library,
+                inputs=[],
+                outputs=[character_gallery]
+                + face_slot_character_pickers,
+            )
+
+        # Auto-swap master toggle + threshold write into the singleton
+        # config read by Single / Batch / Video post-processing.
+        def _on_auto_swap_toggle(enabled):
+            faceswap_config.set_config(auto_swap_from_library=bool(enabled))
+            return (
+                "Auto-swap ON — every generation will run through inswapper."
+                if enabled
+                else "Auto-swap OFF."
+            )
+
+        def _on_threshold_change(threshold):
+            faceswap_config.set_config(similarity_threshold=float(threshold))
+            return f"Threshold set to {float(threshold):.2f}."
+
+        faceswap_auto_enable.change(
+            fn=_on_auto_swap_toggle,
+            inputs=[faceswap_auto_enable],
+            outputs=[faceswap_tab_status],
+        )
+        faceswap_similarity_threshold.change(
+            fn=_on_threshold_change,
+            inputs=[faceswap_similarity_threshold],
+            outputs=[faceswap_tab_status],
+        )
+
+        # Saved-character library controls (live in the Face Swap tab).
+        char_save_btn.click(
+            fn=faceswap_ui.save_upload_as_character,
+            inputs=[char_upload_name, char_upload_image, device],
+            outputs=[faceswap_tab_status],
+        ).then(
+            fn=faceswap_ui.refresh_character_library,
+            inputs=[],
+            outputs=[character_gallery] + face_slot_character_pickers,
+        )
+
+        char_refresh_btn.click(
+            fn=faceswap_ui.refresh_character_library,
+            inputs=[],
+            outputs=[character_gallery] + face_slot_character_pickers,
+        )
+
+        char_delete_btn.click(
+            fn=faceswap_ui.delete_character_handler,
+            inputs=[char_delete_name],
+            outputs=[faceswap_tab_status],
+        ).then(
+            fn=faceswap_ui.refresh_character_library,
+            inputs=[],
+            outputs=[character_gallery] + face_slot_character_pickers,
+        )
+
+        # Populate the saved-character gallery / dropdowns on app load so
+        # the library survives process restarts.
+        demo.load(
+            fn=faceswap_ui.refresh_character_library,
+            inputs=[],
+            outputs=[character_gallery] + face_slot_character_pickers,
         )
 
     return demo

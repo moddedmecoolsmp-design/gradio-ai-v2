@@ -169,12 +169,78 @@ def _install_xformers() -> str:
     return "failed"
 
 
+def _install_face_swap_stack() -> Dict[str, str]:
+    """
+    Install the face-swap runtime stack if the user has toggled face swap
+    (or any code path that imports ``src.image.faceswap_helper``) and the
+    required dependencies aren't present.
+
+    The stack is:
+      * ``opencv-python`` (headless fallback) — for image color conversion.
+      * ``insightface`` — ships ``FaceAnalysis`` + ``get_model('inswapper_128.onnx')``.
+      * ``onnxruntime-gpu`` — CUDA execution provider for inswapper.
+        Falls back to ``onnxruntime`` (CPU) if the GPU wheel install fails
+        so that the feature at least works degradedly without CUDA.
+
+    We deliberately do **not** pin versions: the project's ``requirements.txt``
+    is the canonical source of truth. This installer only exists as a
+    safety net for users who have a partial environment (e.g. installed
+    from a trimmed lock file, or are on a fresh Windows box).
+    """
+    results: Dict[str, str] = {}
+
+    if not _module_importable("cv2"):
+        ok, message = _pip_install(["opencv-python"])
+        if not ok:
+            ok, message = _pip_install(["opencv-python-headless"])
+        results["opencv-python"] = (
+            "installed" if ok and _module_importable("cv2") else "failed"
+        )
+        if not ok:
+            print(f"  [accelerator-installer] opencv install skipped: {message}")
+    else:
+        results["opencv-python"] = "present"
+
+    if not _module_importable("insightface"):
+        ok, message = _pip_install(["insightface"])
+        results["insightface"] = (
+            "installed" if ok and _module_importable("insightface") else "failed"
+        )
+        if not ok:
+            print(f"  [accelerator-installer] insightface install skipped: {message}")
+    else:
+        results["insightface"] = "present"
+
+    # onnxruntime: prefer GPU wheel on CUDA, fall back to CPU wheel.
+    if not _module_importable("onnxruntime"):
+        prefer_gpu = _is_cuda_available()
+        order = ["onnxruntime-gpu", "onnxruntime"] if prefer_gpu else ["onnxruntime"]
+        last_message = ""
+        for pkg in order:
+            ok, message = _pip_install([pkg])
+            last_message = message
+            if ok and _module_importable("onnxruntime"):
+                results["onnxruntime"] = "installed"
+                break
+        else:
+            results["onnxruntime"] = "failed"
+            print(
+                f"  [accelerator-installer] onnxruntime install skipped: {last_message}"
+            )
+    else:
+        results["onnxruntime"] = "present"
+
+    return results
+
+
 def auto_install_accelerators(device: Optional[str] = None) -> Dict[str, str]:
     """
     One-shot, thread-safe installer. Returns {pkg: status} where status is one of
     "present" | "installed" | "failed" | "skipped".
 
     Safe to call from any code path; subsequent calls return the cached result.
+    Covers both the attention accelerators (SageAttention / xFormers) and
+    the face-swap runtime stack (OpenCV / InsightFace / onnxruntime).
     """
     global _ATTEMPTED
 
@@ -182,9 +248,18 @@ def auto_install_accelerators(device: Optional[str] = None) -> Dict[str, str]:
         if _ATTEMPTED:
             return dict(_INSTALL_STATE)
 
+        # Face-swap stack always runs — it's required by the feature whether
+        # we're on the Windows+RTX 3070 fast path or not. It'll no-op quickly
+        # when everything is already present.
+        print("  [accelerator-installer] first-run probe: checking face-swap stack...")
+        _INSTALL_STATE.update(_install_face_swap_stack())
+
         if not _should_attempt(device):
-            _INSTALL_STATE.update({"sageattention": "skipped", "xformers": "skipped"})
+            _INSTALL_STATE.setdefault("sageattention", "skipped")
+            _INSTALL_STATE.setdefault("xformers", "skipped")
             _ATTEMPTED = True
+            summary = ", ".join(f"{pkg}={status}" for pkg, status in _INSTALL_STATE.items())
+            print(f"  [accelerator-installer] done ({summary}).")
             return dict(_INSTALL_STATE)
 
         print("  [accelerator-installer] first-run probe: checking sageattention / xformers...")

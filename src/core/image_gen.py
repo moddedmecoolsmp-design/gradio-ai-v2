@@ -287,6 +287,17 @@ class ImageGenerator:
         # Cleanup & Return
         self._cleanup(device)
 
+        # Post-processing: library-driven face swap. If the user has enabled
+        # "Auto-swap saved characters" in the Face Swap tab, every generated
+        # image is fed through inswapper so saved characters stay consistent
+        # across Single / Batch / Video without manual per-output assignments.
+        try:
+            from src.image import faceswap_config
+            image = faceswap_config.post_process_with_library(image, device=device)
+        except Exception as _swap_exc:
+            # Library auto-swap is best-effort — never fails generation.
+            print(f"  [face-swap] library post-process skipped: {_swap_exc}")
+
         fallback_info = f" | Note: {self.pm.last_model_fallback_reason}" if self.pm.last_model_fallback_reason else ""
         status = f"Seed: {seed} | Mode: {mode_str} | Model: {current_model} | Device: {device}{fallback_info}"
         return image, status
