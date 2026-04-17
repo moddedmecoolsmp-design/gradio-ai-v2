@@ -225,6 +225,21 @@ def create_ui(context: Mapping[str, Any]):
                                     label="Mode",
                                     info="body_face includes facial expression landmarks.",
                                 )
+                            # Quality complement to DWPose: the Klein Face
+                            # Expression Transfer LoRA (Civitai v2658175)
+                            # skips skeleton extraction and instead relies
+                            # on a dual-image trigger phrase. Works stand-
+                            # alone or stacked on top of the DWPose path.
+                            # FLUX.2-klein only — silent no-op on Z-Image.
+                            enable_expression_transfer = gr.Checkbox(
+                                label="Klein Face Expression Transfer LoRA",
+                                value=False,
+                                info=(
+                                    "Loads the v2658175 LoRA and prepends its "
+                                    "trigger phrase. Expression-focused; "
+                                    "FLUX.2-klein only."
+                                ),
+                            )
 
                         with gr.Accordion(
                             "Upscale after generation", open=False
@@ -241,9 +256,14 @@ def create_ui(context: Mapping[str, Any]):
                             )
                             with gr.Row():
                                 upscale_model_inline = gr.Dropdown(
-                                    choices=upscaler_helper.get_models(),
+                                    choices=upscaler_helper.get_all_model_choices(),
                                     value=upscaler_helper.DEFAULT_MODEL,
                                     label="Upscaler Model",
+                                    info=(
+                                        "Real-ESRGAN / UltraSharp: fast "
+                                        "(~1 s on 3070). Klein High-Res LoRA: "
+                                        "quality-first img2img refine (~5 s)."
+                                    ),
                                 )
                                 upscale_target_scale_inline = gr.Slider(
                                     minimum=1.0,
@@ -546,7 +566,7 @@ def create_ui(context: Mapping[str, Any]):
                             height=360,
                         )
                         upscale_model_tab = gr.Dropdown(
-                            choices=upscaler_helper.get_models(),
+                            choices=upscaler_helper.get_all_model_choices(),
                             value=upscaler_helper.DEFAULT_MODEL,
                             label="Upscaler Model",
                             info=(
@@ -979,6 +999,7 @@ def create_ui(context: Mapping[str, Any]):
                 preservation_input,
                 preservation_detector,
                 preservation_mode,
+                enable_expression_transfer,
                 # Upscale post-processing (inline)
                 upscale_enable,
                 upscale_model_inline,

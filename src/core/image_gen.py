@@ -59,6 +59,12 @@ class ImageGenerator:
         preservation_input: Optional[Any] = None,
         preservation_detector: str = "dwpose",
         preservation_mode: str = "body_face",
+        # ---- Klein Face Expression Transfer LoRA (quality path) --------
+        # Complement to DWPose-based preservation: loads the Civitai
+        # v2658175 LoRA and prepends its dual-image trigger word. Works
+        # stand-alone (without enable_preservation) or stacked on top of
+        # the DWPose skeleton path.
+        enable_expression_transfer: bool = False,
         # ---- Upscale (run after face-swap post-process) ----
         enable_upscale: bool = False,
         upscale_model: Optional[str] = None,
@@ -140,7 +146,14 @@ class ImageGenerator:
                     detector=preservation_detector,
                     mode=preservation_mode,
                 )
-                if augmented is not None:
+                # Only augment the prompt when a skeleton was actually
+                # extracted. ``build_preservation_inputs`` returns the
+                # original (possibly non-empty) ``existing_input_images``
+                # list even when extraction fails, so checking
+                # ``augmented is not None`` is insufficient — we'd promise
+                # the model a pose skeleton that isn't in the refs and
+                # confuse it. Gate on ``_skeleton`` directly.
+                if _skeleton is not None:
                     input_images = augmented
                     prompt = augment_prompt_for_preservation(prompt)
                 print(f"  [preservation] {preservation_status}")
@@ -154,6 +167,31 @@ class ImageGenerator:
         if enable_klein_anatomy_fix and "flux2-klein" in current_model:
             if os.path.exists(self.pm.klein_anatomy_lora_path):
                 self.pm.load_lora(self.pm.klein_anatomy_lora_path, 0.8, device)
+
+        # Klein Face Expression Transfer LoRA — quality complement to the
+        # DWPose preservation path. Auto-downloads on first use, loads at
+        # the Civitai-recommended 1.0 strength, and prepends its dual-
+        # image trigger phrase so the model knows which reference slot
+        # holds the expression to copy. Silent no-op on non-Klein models
+        # (the LoRA weights don't map onto Z-Image / SDXL layers).
+        if enable_expression_transfer and "flux2-klein" in current_model:
+            try:
+                from src.constants import (
+                    KLEIN_EXPRESSION_LORA_STRENGTH,
+                    KLEIN_EXPRESSION_LORA_TRIGGER,
+                )
+
+                expr_path = self.pm.ensure_builtin_lora_downloaded(
+                    "klein_expression", progress_callback
+                )
+                if expr_path and os.path.exists(expr_path):
+                    self.pm.load_lora(expr_path, KLEIN_EXPRESSION_LORA_STRENGTH, device)
+                    # Prepend the trigger phrase only once — users may
+                    # already have authored it into their prompt.
+                    if KLEIN_EXPRESSION_LORA_TRIGGER.lower() not in (prompt or "").lower():
+                        prompt = f"{KLEIN_EXPRESSION_LORA_TRIGGER}. {prompt}"
+            except Exception as _expr_exc:
+                print(f"  [expression-transfer] skipped: {_expr_exc}")
 
         # 6. Generation Parameters
         if seed == -1:

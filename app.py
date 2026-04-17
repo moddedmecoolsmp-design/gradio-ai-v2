@@ -2662,6 +2662,11 @@ def generate_image(
     preservation_input=None,
     preservation_detector="dwpose",
     preservation_mode="body_face",
+    # Face Expression Transfer LoRA — optional quality complement to the
+    # DWPose-skeleton preservation path. Toggling this independent of
+    # ``enable_preservation`` is intentional (the LoRA can be used alone
+    # with two reference images dropped into the standard img2img path).
+    enable_expression_transfer=False,
     # Upscale post-processing — run after face swap if enabled.
     enable_upscale=False,
     upscale_model=None,
@@ -2684,6 +2689,8 @@ def generate_image(
         # Map dropdown display value to internal key
         lora_key_map = {
             "Klein Anatomy Fix": "klein_anatomy",
+            "Klein High-Resolution (upscale LoRA)": "klein_hires",
+            "Klein Face Expression Transfer": "klein_expression",
             "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
             "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
         }
@@ -2721,6 +2728,7 @@ def generate_image(
         preservation_input=preservation_input,
         preservation_detector=preservation_detector,
         preservation_mode=preservation_mode,
+        enable_expression_transfer=enable_expression_transfer,
         enable_upscale=enable_upscale,
         upscale_model=upscale_model,
         upscale_target_scale=upscale_target_scale,
@@ -2769,6 +2777,8 @@ def batch_process_folder(
         # Map dropdown display value to internal key
         lora_key_map = {
             "Klein Anatomy Fix": "klein_anatomy",
+            "Klein High-Resolution (upscale LoRA)": "klein_hires",
+            "Klein Face Expression Transfer": "klein_expression",
             "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
             "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
         }
@@ -2877,6 +2887,8 @@ def process_video(
         # Map dropdown display value to internal key
         lora_key_map = {
             "Klein Anatomy Fix": "klein_anatomy",
+            "Klein High-Resolution (upscale LoRA)": "klein_hires",
+            "Klein Face Expression Transfer": "klein_expression",
             "Realistic Snapshot v5 (Z-Image)": "zimage_realistic",
             "Ultra Real Amateur Selfies (FLUX 4B)": "flux_anime2real",
         }

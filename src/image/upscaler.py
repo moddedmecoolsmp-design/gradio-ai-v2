@@ -53,6 +53,24 @@ class UpscalerModel:
     # ``num_block`` is the only RRDBNet hyperparameter that varies across
     # the Real-ESRGAN checkpoints (x4plus = 23, anime_6B = 6).
     num_block: int = 23
+    # HuggingFace coordinates are the *primary* download path when
+    # available — ``huggingface_hub.hf_hub_download`` is resumable,
+    # CDN-cached and shares the cache with every other model the app
+    # already pulls from HF (one ``HF_HOME`` rules them all). ``url`` is
+    # retained as the offline fallback (e.g. corp networks that block
+    # huggingface.co but allow github.com releases). The Real-ESRGAN
+    # xinntao checkpoints have no stable HF mirror, so they keep the
+    # GitHub URL only. 4x-UltraSharp is on HF (lokCX/4x-Ultrasharp) so
+    # it uses hf_hub_download by default.
+    hf_repo: Optional[str] = None
+    hf_filename: Optional[str] = None
+
+
+# Special key for the FLUX.2-klein High-Resolution LoRA upscaler path.
+# Dispatched through ``src.image.lora_upscaler`` which runs a full
+# FLUX.2 img2img pass; ~5x slower than ESRGAN but preserves content
+# essentially pixel-for-pixel.
+KLEIN_HIRES_LORA_MODEL_KEY = "Klein High-Resolution LoRA (img2img, quality)"
 
 
 MODELS: Dict[str, UpscalerModel] = {
@@ -76,6 +94,8 @@ MODELS: Dict[str, UpscalerModel] = {
     ),
     "4x-UltraSharp": UpscalerModel(
         name="4x-UltraSharp",
+        hf_repo="lokCX/4x-Ultrasharp",
+        hf_filename="4x-UltraSharp.pth",
         url="https://huggingface.co/lokCX/4x-Ultrasharp/resolve/main/4x-UltraSharp.pth",
         scale=4,
         num_block=23,
@@ -83,6 +103,17 @@ MODELS: Dict[str, UpscalerModel] = {
 }
 
 DEFAULT_MODEL = "Real-ESRGAN x4plus"
+
+
+def get_all_model_choices() -> list[str]:
+    """
+    Return every upscaler choice for the UI dropdown, including the
+    FLUX.2-klein High-Resolution LoRA virtual entry. The LoRA path is
+    handled by ``upscaler_ui`` (not by :class:`UpscalerHelper`) so we
+    don't put it in ``MODELS`` — it doesn't have a ``.pth`` and isn't
+    an RRDBNet.
+    """
+    return list(MODELS.keys()) + [KLEIN_HIRES_LORA_MODEL_KEY]
 
 
 def get_models() -> list[str]:
@@ -102,11 +133,53 @@ def _cache_dir() -> Path:
 
 
 def _download_weights(model: UpscalerModel) -> Path:
-    """Download ``model`` into the cache dir if not already present."""
+    """
+    Download ``model`` into the cache dir if not already present.
+
+    HuggingFace is the preferred path when ``model.hf_repo`` is set — it's
+    resumable, shares ``HF_HOME`` with the FLUX.2-klein base model (so
+    users who already run FLUX don't have to warm a second cache), and
+    is much faster than raw GitHub releases on Windows (HF CDN +
+    connection pooling vs single-connection urllib on github.com). We
+    fall back to urllib on ``model.url`` if ``huggingface_hub`` isn't
+    installed or the HF download fails (HF_HUB_OFFLINE, rate-limit,
+    corporate proxy, etc.).
+    """
     target = _cache_dir() / f"{model.name}.pth"
     if target.exists() and target.stat().st_size > 0:
         return target
 
+    # --- Primary path: huggingface_hub.hf_hub_download (when available).
+    if model.hf_repo and model.hf_filename:
+        try:
+            from huggingface_hub import hf_hub_download  # type: ignore
+
+            logger.info(
+                "Upscaler: downloading %s from hf://%s/%s",
+                model.name,
+                model.hf_repo,
+                model.hf_filename,
+            )
+            hf_path = hf_hub_download(
+                repo_id=model.hf_repo,
+                filename=model.hf_filename,
+            )
+            # ``hf_hub_download`` returns a path in the HF cache; copy it
+            # into our own cache so callers don't have to care whether
+            # HF_HOME is set. ``Path.replace`` across filesystems is
+            # unsafe, so we fall back to a tiny copy loop.
+            import shutil
+
+            shutil.copyfile(hf_path, target)
+            return target
+        except Exception as exc:
+            logger.warning(
+                "Upscaler: hf_hub_download failed for %s (%s); falling back to urllib.",
+                model.name,
+                exc,
+            )
+
+    # --- Fallback: plain urllib download from ``model.url``.
     logger.info("Upscaler: downloading %s from %s", model.name, model.url)
     tmp = target.with_suffix(".pth.partial")
     try:

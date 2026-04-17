@@ -57,8 +57,25 @@ class PipelineManager:
         self.state_dir = os.path.join(base_dir, "user_state")
         self.cache_dir = os.path.join(base_dir, "cache")
 
-        self.klein_anatomy_lora_url = "https://civitai.com/api/download/models/2324991"
+        # Klein Anatomy Quality Fixer — 4B variant.  The Civitai URL takes
+        # a *version* ID (2617474 is the 4B; the bare model ID 2324991 used
+        # to resolve to the 9B build which silently mismatched 4B users).
+        self.klein_anatomy_lora_url = "https://civitai.com/api/download/models/2617474"
         self.klein_anatomy_lora_path = os.path.join(self.loras_dir, "kleinSliderAnatomy.safetensors")
+
+        # Klein High-Resolution LoRA — 4B build.  Used as the quality-first
+        # upscaler path (trigger "High resolution", strength 0.9, ~88 MB).
+        # Runs a full FLUX.2 img2img pass; slower than ESRGAN but preserves
+        # content much more faithfully.
+        self.klein_hires_lora_url = "https://civitai.com/api/download/models/2739957"
+        self.klein_hires_lora_path = os.path.join(self.loras_dir, "kleinHighResolution.safetensors")
+
+        # Klein Face Expression Transfer LoRA — 4B build (trigger "transfer
+        # character face expression in image1 with character face expression
+        # in image2", strength 1.0, ~88 MB).  Quality complement to DWPose
+        # preservation — skips the pose-extraction pre-pass entirely.
+        self.klein_expression_lora_url = "https://civitai.com/api/download/models/2658175"
+        self.klein_expression_lora_path = os.path.join(self.loras_dir, "kleinFaceExpressionTransfer.safetensors")
 
         # Built-in anime-to-photoreal LoRAs
         # Realistic Snapshot v5 for Z-Image Turbo: adds raw texture, realistic skin,
@@ -1476,6 +1493,8 @@ class PipelineManager:
 
         path_map = {
             "klein_anatomy": self.klein_anatomy_lora_path,
+            "klein_hires": self.klein_hires_lora_path,
+            "klein_expression": self.klein_expression_lora_path,
             "zimage_realistic": self.zimage_realistic_lora_path,
             "flux_anime2real": self.flux_anime2real_lora_path,
         }
@@ -1488,6 +1507,8 @@ class PipelineManager:
 
         path_map = {
             "klein_anatomy": (self.klein_anatomy_lora_path, self.klein_anatomy_lora_url, "Klein Anatomy Fix"),
+            "klein_hires": (self.klein_hires_lora_path, self.klein_hires_lora_url, "Klein High-Resolution LoRA"),
+            "klein_expression": (self.klein_expression_lora_path, self.klein_expression_lora_url, "Klein Face Expression Transfer LoRA"),
             "zimage_realistic": (self.zimage_realistic_lora_path, self.zimage_realistic_lora_url, "Realistic Snapshot LoRA (Z-Image)"),
             "flux_anime2real": (self.flux_anime2real_lora_path, self.flux_anime2real_lora_url, "Ultra Real Amateur Selfies LoRA (FLUX 4B)"),
         }

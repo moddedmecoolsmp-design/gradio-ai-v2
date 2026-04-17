@@ -13,9 +13,115 @@ from typing import Optional, Tuple
 
 from PIL import Image
 
-from src.image.upscaler import DEFAULT_MODEL, MODELS, get_upscaler
+from src.image.upscaler import (
+    DEFAULT_MODEL,
+    KLEIN_HIRES_LORA_MODEL_KEY,
+    MODELS,
+    get_upscaler,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _run_klein_hires_lora_upscale(
+    image: Image.Image,
+    target_scale: float,
+    device: str,
+    progress=None,
+) -> Tuple[Optional[Image.Image], str]:
+    """
+    Quality-first upscaler path: run the Klein High-Resolution LoRA
+    (Civitai v2739957) through a FLUX.2-klein img2img pass.
+
+    This is intentionally slower than ESRGAN (~5 s vs ~1 s on a 3070)
+    but "preserves everything" (the LoRA's trained property — it barely
+    deviates from the input composition). The weights auto-download on
+    first call via ``PipelineManager.ensure_builtin_lora_downloaded``.
+
+    Run via the global :class:`ImageGenerator` instance because that's
+    where the FLUX.2-klein pipeline warmup, device placement and
+    LoRA-stacking logic already live. Lazy-imported to keep
+    ``upscaler_ui`` importable at app boot (app.py imports this module
+    before instantiating the generator).
+    """
+    try:
+        import app as _app  # type: ignore
+    except Exception as exc:  # pragma: no cover — app not importable in tests
+        return None, f"Klein Hi-Res LoRA upscale unavailable: {exc}"
+
+    gen = getattr(_app, "gen", None)
+    pm = getattr(_app, "pipeline_manager", None)
+    if gen is None or pm is None:
+        return None, (
+            "Klein Hi-Res LoRA upscale requires the main generator; run "
+            "it through the inline 'Upscale after generation' accordion "
+            "instead."
+        )
+
+    try:
+        from src.constants import (
+            KLEIN_HIRES_LORA_STRENGTH,
+            KLEIN_HIRES_LORA_TRIGGER,
+        )
+
+        lora_path = pm.ensure_builtin_lora_downloaded("klein_hires", progress)
+        if not lora_path:
+            return None, (
+                "Klein Hi-Res LoRA download failed. Check connectivity "
+                "and try again."
+            )
+
+        # Scale the target resolution by ``target_scale``; the LoRA is a
+        # refiner, so the effective upscale comes from the resolution
+        # bump, not from the model multiplying dimensions itself.
+        scale = float(target_scale) if target_scale else 4.0
+        new_w = int(image.width * scale)
+        new_h = int(image.height * scale)
+        # VAE requires dims divisible by 16. Align down.
+        new_w = (new_w // 16) * 16 or 16
+        new_h = (new_h // 16) * 16 or 16
+
+        upscaled_input = image.resize((new_w, new_h), Image.LANCZOS)
+
+        # Run the short img2img refine. We reuse the generator's
+        # ``generate`` entry point because it already handles
+        # quantization, device offload, attention cascade, LoRA
+        # stacking and preservation gates.
+        prompt = f"{KLEIN_HIRES_LORA_TRIGGER}. highly detailed, sharp focus"
+        result = gen.generate(
+            prompt=prompt,
+            negative_prompt="",
+            height=new_h,
+            width=new_w,
+            steps=4,
+            seed=-1,
+            guidance=1.0,
+            device=device,
+            model_choice="FLUX.2 [klein] 4B (SDNQ Int4)",
+            input_images=[upscaled_input],
+            img2img_strength=0.35,  # light refine — preserve content
+            lora_file=lora_path,
+            lora_strength=KLEIN_HIRES_LORA_STRENGTH,
+            progress_callback=progress,
+        )
+        # ``generate`` returns (image, status_or_seed_info, …) — peel.
+        if isinstance(result, tuple) and len(result) >= 1:
+            out_img = result[0]
+        else:
+            out_img = result
+        if not isinstance(out_img, Image.Image):
+            return None, (
+                "Klein Hi-Res LoRA upscale did not produce an image. "
+                "See console for generator status."
+            )
+        return out_img, (
+            f"Upscaled with Klein High-Resolution LoRA "
+            f"({image.width}x{image.height} -> {out_img.width}x{out_img.height}) "
+            f"on {device}."
+        )
+    except Exception as exc:
+        logger.exception("Klein Hi-Res LoRA upscale failed")
+        return None, f"Klein Hi-Res LoRA upscale failed: {exc}"
 
 
 def run_upscale(
@@ -33,9 +139,17 @@ def run_upscale(
     model scaled to 2x). ``tile`` caps VRAM by running the model on
     overlapping crops. Failures are reported in the status message rather
     than raised so the Gradio call chain doesn't 500.
+
+    Dispatches to the Klein High-Resolution LoRA img2img path when
+    ``model_key`` matches the sentinel — that path runs through the
+    main FLUX.2-klein generator (slower, quality-first) and ignores the
+    ``tile`` parameter.
     """
     if image is None:
         return None, "Upload or send an image to the Upscaler first."
+
+    if model_key == KLEIN_HIRES_LORA_MODEL_KEY:
+        return _run_klein_hires_lora_upscale(image, target_scale, device, progress)
 
     if model_key not in MODELS:
         return None, f"Unknown upscaler model: {model_key}."
