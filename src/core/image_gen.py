@@ -112,6 +112,14 @@ class ImageGenerator:
 
         pipe = self.pm.load_pipeline(model_choice, device)
         current_model = self.pm.current_model
+        # Capture fallback reason immediately: the inline-upscale path may
+        # recurse into ``generate()`` (Klein Hi-Res LoRA refine calls
+        # ``gen.generate(model_choice=LOW_VRAM_FLUX_MODEL_CHOICE, ...)``),
+        # and that inner ``load_pipeline`` overwrites
+        # ``self.pm.last_model_fallback_reason``. If we read it only at
+        # status-string build time we would surface the inner SDNQ load's
+        # fallback reason (or clobber the user's real one with ``None``).
+        fallback_reason = self.pm.last_model_fallback_reason
 
         # Clamp step count for distilled models. FLUX.2 [klein] and Z-Image
         # Turbo are 4-step-distilled: quality plateaus at ~4 steps and any
@@ -432,7 +440,7 @@ class ImageGenerator:
             except Exception as _ups_exc:
                 print(f"  [upscale] post-process skipped: {_ups_exc}")
 
-        fallback_info = f" | Note: {self.pm.last_model_fallback_reason}" if self.pm.last_model_fallback_reason else ""
+        fallback_info = f" | Note: {fallback_reason}" if fallback_reason else ""
         status = f"Seed: {seed} | Mode: {mode_str} | Model: {current_model} | Device: {device}{fallback_info}"
         if preservation_status:
             status += f" | {preservation_status}"
