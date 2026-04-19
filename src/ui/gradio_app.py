@@ -427,16 +427,27 @@ def create_ui(context: Mapping[str, Any]):
                     )
 
                 gr.Markdown("### LoRA")
+                # LoRA controls start visible; ``update_ui_for_model``
+                # keeps them that way for every shipped model (show_lora
+                # = True) so hiding by default only caused a frame of
+                # empty section before the first model.change fired.
+                _initial_builtin_lora = (
+                    initial_state.get("builtin_lora")
+                    or "None (Custom File Upload)"
+                )
+                _show_custom_file = (
+                    _initial_builtin_lora == "None (Custom File Upload)"
+                )
                 lora_label = gr.Markdown(
                     "Select a built-in LoRA, or upload a custom .safetensors file.",
-                    visible=False,
+                    visible=True,
                 )
                 builtin_lora = gr.Dropdown(
                     choices=[choice[0] for choice in BUILTIN_LORA_CHOICES],
-                    value=initial_state.get("builtin_lora", "None (Custom File Upload)"),
+                    value=_initial_builtin_lora,
                     label="Built-in LoRA",
                     info="Choose 'None' to upload your own.",
-                    visible=False,
+                    visible=True,
                 )
                 with gr.Row():
                     lora_file = gr.File(
@@ -445,10 +456,11 @@ def create_ui(context: Mapping[str, Any]):
                         file_count="single",
                         type="filepath",
                         value=initial_state["lora_file"],
-                        visible=False,
+                        visible=_show_custom_file,
                     )
                     clear_lora_btn = gr.Button(
-                        "Clear LoRA", scale=0, min_width=100, visible=False
+                        "Clear LoRA", scale=0, min_width=100,
+                        visible=_show_custom_file,
                     )
                 lora_strength = gr.Slider(
                     0.0,
@@ -457,7 +469,7 @@ def create_ui(context: Mapping[str, Any]):
                     step=0.05,
                     label="LoRA Strength",
                     info="1.0 = full effect, 0.5 = half effect.",
-                    visible=False,
+                    visible=True,
                 )
 
                 gr.Markdown("### Model Quality")
@@ -618,10 +630,21 @@ def create_ui(context: Mapping[str, Any]):
                 )
 
                 with gr.Accordion("Image Settings", open=True):
-                    downscale_factor = gr.Textbox(
-                        label="Downscale Factor (e.g., 2x, 4x)",
-                        value=initial_state["downscale_factor"],
-                        info="Applies to image-to-image and batch. 1x = no downscale.",
+                    # ``parse_downscale_factor`` accepts both "2x" strings
+                    # and plain floats, so swap the Textbox for a Number
+                    # input with stepper arrows — nicer to drive from the
+                    # keyboard and removes the "did I type 2 or 2x?"
+                    # ambiguity.
+                    downscale_factor = gr.Number(
+                        label="Downscale Factor",
+                        value=parse_downscale_factor(
+                            initial_state["downscale_factor"]
+                        ),
+                        minimum=1.0,
+                        maximum=8.0,
+                        step=0.25,
+                        precision=2,
+                        info="1.0 = no downscale. Applies to image-to-image and batch.",
                     )
                     img2img_strength = gr.Slider(
                         0.0,
