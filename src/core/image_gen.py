@@ -147,6 +147,14 @@ class ImageGenerator:
         if self.stop_requested:
             return None, "Cancelled by user.", None
 
+        # Capture the user's original first input reference BEFORE the
+        # preservation block mutates ``input_images`` (it prepends a pose
+        # skeleton at index 0). Text preservation's source-image fallback
+        # at the end of the pipeline must see the original manga/comic
+        # panel, not the black-background stick-figure skeleton —
+        # otherwise OCR runs on the skeleton and extracts nothing.
+        _original_first_input = input_images[0] if input_images else None
+
         # Preservation: extract pose + facial landmarks from preservation_input
         # and prepend the skeleton to input_images so FLUX.2-klein conditions
         # the generation on it. Also appends a short pose directive to the
@@ -473,8 +481,11 @@ class ImageGenerator:
             try:
                 from src.image.text_preservation import preserve_text
                 tp_source = text_preservation_source
-                if tp_source is None and input_images:
-                    tp_source = input_images[0]
+                if tp_source is None:
+                    # Use the pre-preservation reference so OCR runs on
+                    # the original manga/comic panel, never on the pose
+                    # skeleton that the preservation step prepended.
+                    tp_source = _original_first_input
                 tp_langs = tuple(text_preservation_languages or ("en",))
                 image, text_status = preserve_text(
                     tp_source,
