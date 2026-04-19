@@ -19,16 +19,41 @@ def on_builtin_lora_change(builtin_lora):
 def create_ui(context: Mapping[str, Any]):
     module_globals = globals()
     module_globals.update(context)
+    # Soft theme with tuned spacing/radius — calmer than the stock
+    # Gradio default, and the generated-image panel gets enough
+    # breathing room to stay the visual focus of the Generate tab.
+    theme = gr.themes.Soft(
+        primary_hue="blue",
+        secondary_hue="slate",
+        neutral_hue="slate",
+        spacing_size="md",
+        radius_size="md",
+    )
+    # Fixed-height output image (stops the right column from collapsing
+    # to 50 px before the first generation completes) + slightly more
+    # prominent primary button.  Pure CSS so it degrades cleanly on
+    # older Gradio versions.
+    custom_css = """
+    #ufig-output-image img { max-height: 720px; object-fit: contain; }
+    #ufig-output-image { min-height: 360px; }
+    button.primary { font-weight: 600; }
+    .ufig-post-processing-heading { margin-top: 0.5rem; opacity: 0.8; }
+    """
     with gr.Blocks(
         title="Ultra Fast Image Gen",
+        theme=theme,
+        css=custom_css,
         delete_cache=(GRADIO_CACHE_CLEANUP_FREQUENCY_SECONDS, GRADIO_CACHE_TTL_SECONDS),
     ) as demo:
         gr.Markdown(
             """
             # Ultra Fast Image Gen
 
-            Fast AI image generation and editing. Advanced controls are in the
-            **Advanced** tab; model selection and LoRA in **Models & LoRA**.
+            Fast AI image generation and editing for RTX 3070 / 8 GB VRAM.
+            Pick a model and preset in **Generate**, adjust optimisations in
+            **Advanced**, and manage LoRAs in **Models & LoRA**. Post-processing
+            (preservation, upscale, face swap, text preservation) lives next to
+            the generated image and runs in pipeline order once per click.
             """
         )
 
@@ -181,10 +206,20 @@ def create_ui(context: Mapping[str, Any]):
 
                     with gr.Column(scale=1):
                         output_image = gr.Image(
-                            label="Generated Image", type="pil", format="png"
+                            label="Generated Image",
+                            type="pil",
+                            format="png",
+                            elem_id="ufig-output-image",
+                            show_download_button=True,
+                            show_share_button=False,
                         )
                         send_to_upscaler_btn = gr.Button(
                             "Send to Upscaler", size="sm", variant="secondary"
+                        )
+
+                        gr.Markdown(
+                            "#### Post-processing",
+                            elem_classes=["ufig-post-processing-heading"],
                         )
 
                         with gr.Accordion(

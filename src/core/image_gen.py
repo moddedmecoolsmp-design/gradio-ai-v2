@@ -472,12 +472,12 @@ class ImageGenerator:
         # the final (post-face-swap, post-upscale) image at full output
         # resolution. If no explicit source was passed, fall back to
         # the first input/reference image — for manga-to-realistic the
-        # img2img source IS the text source. Skipped for internal
-        # recursive callers (``skip_face_swap=True``) so the Klein Hi-
-        # Res LoRA refine doesn't re-OCR + re-paint on top of its own
-        # post-face-swap output.
+        # img2img source IS the text source. Independent of
+        # ``skip_face_swap``: recursive callers (e.g. the Klein Hi-Res
+        # LoRA refine) don't set ``enable_text_preservation=True`` on
+        # the inner call so the feature naturally doesn't re-trigger.
         text_status: Optional[str] = None
-        if enable_text_preservation and not skip_face_swap:
+        if enable_text_preservation:
             try:
                 from src.image.text_preservation import preserve_text
                 tp_source = text_preservation_source

@@ -164,34 +164,79 @@ def extract_text_regions(
     return out
 
 
+# Resolve the usable font file once per process.  ``ImageFont.truetype``
+# hits the filesystem on every call, so the binary-search inside
+# ``_fit_text_in_bbox`` used to re-probe Arial / Helvetica / DejaVu up to
+# ~11 times per region (log2(200) iterations).  Caching the resolved
+# path cuts that to a single stat.  ``None`` means "no TrueType found,
+# fall back to the bitmap default".
+_FONT_FILE_LOCK = threading.Lock()
+_FONT_FILE_PATH: Optional[str] = None
+_FONT_FILE_RESOLVED = False
+# Cache font objects keyed by (path_or_None, size_or_None) so repeated
+# ``_load_default_font(size)`` calls in the binary-search loop reuse the
+# same ``FreeTypeFont`` instance.
+_FONT_SIZE_CACHE: dict = {}
+
+
+def _resolve_font_path() -> Optional[str]:
+    """Find the first usable TrueType font, caching the result."""
+
+    global _FONT_FILE_PATH, _FONT_FILE_RESOLVED
+
+    with _FONT_FILE_LOCK:
+        if _FONT_FILE_RESOLVED:
+            return _FONT_FILE_PATH
+
+        candidates = [
+            # Windows
+            "arial.ttf",
+            "segoeui.ttf",
+            "calibri.ttf",
+            # macOS
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            # Linux
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]
+        for name in candidates:
+            try:
+                ImageFont.truetype(name, size=12)
+            except (OSError, IOError):
+                continue
+            _FONT_FILE_PATH = name
+            break
+        _FONT_FILE_RESOLVED = True
+        return _FONT_FILE_PATH
+
+
 def _load_default_font(pixel_height: int) -> ImageFont.ImageFont:
     """Pick a decent sans-serif font at the requested pixel height.
 
     Falls back to PIL's bitmap default if no TrueType is available.
+    Results are cached per (path, size) so repeated calls inside the
+    text-fitting binary search don't thrash the filesystem.
     """
 
-    # Try a handful of common system fonts in order.  The first that
-    # loads wins; PIL silently raises OSError on missing fonts.
-    candidates = [
-        # Windows
-        "arial.ttf",
-        "segoeui.ttf",
-        "calibri.ttf",
-        # macOS
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        # Linux
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ]
     size = max(8, int(pixel_height))
-    for name in candidates:
+    path = _resolve_font_path()
+    key = (path, size)
+    cached = _FONT_SIZE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    if path is None:
+        # Last-resort: bitmap font (ignores ``size``).
+        font = ImageFont.load_default()
+    else:
         try:
-            return ImageFont.truetype(name, size=size)
+            font = ImageFont.truetype(path, size=size)
         except (OSError, IOError):
-            continue
-    # Last-resort: bitmap font (ignores ``size``).
-    return ImageFont.load_default()
+            font = ImageFont.load_default()
+
+    _FONT_SIZE_CACHE[key] = font
+    return font
 
 
 def _fit_text_in_bbox(
