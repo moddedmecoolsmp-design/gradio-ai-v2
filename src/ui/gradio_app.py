@@ -283,6 +283,78 @@ def create_ui(context: Mapping[str, Any]):
                             )
 
                         with gr.Accordion(
+                            "Text Preservation (OCR source, repaint output)",
+                            open=False,
+                        ) as text_preservation_accordion:
+                            gr.Markdown(
+                                "Extracts text from the input image (manga "
+                                "speech bubbles, captions, signage, etc.) and "
+                                "repaints it onto the generated image at the "
+                                "same relative position. Diffusion models "
+                                "reliably garble or delete text, so this is "
+                                "the only way to keep manga / comic text "
+                                "readable after a realistic-style conversion. "
+                                "EasyOCR runs on CUDA (CUDA 13-compatible) "
+                                "and auto-downloads its weights on first use."
+                            )
+                            enable_text_preservation = gr.Checkbox(
+                                label="Enable Text Preservation",
+                                value=False,
+                                info=(
+                                    "When off, OCR never runs. Source defaults "
+                                    "to the Image-to-Image reference if no "
+                                    "explicit source is set."
+                                ),
+                            )
+                            text_preservation_source = gr.Image(
+                                label="Text Source (defaults to img2img input)",
+                                type="pil",
+                                sources=["upload", "clipboard"],
+                                height=200,
+                            )
+                            with gr.Row():
+                                text_preservation_languages = gr.Dropdown(
+                                    # EasyOCR language codes that are most
+                                    # relevant for manga / comic / screenshot
+                                    # workflows. The dropdown accepts multi-
+                                    # select so a Japanese manga with English
+                                    # publisher captions can use both.
+                                    choices=[
+                                        "en",
+                                        "ja",
+                                        "ch_sim",
+                                        "ch_tra",
+                                        "ko",
+                                        "fr",
+                                        "de",
+                                        "es",
+                                        "it",
+                                        "pt",
+                                        "ru",
+                                    ],
+                                    value=["en"],
+                                    multiselect=True,
+                                    label="OCR Languages",
+                                    info=(
+                                        "EasyOCR language codes. Add 'ja' "
+                                        "for Japanese manga, 'ch_sim' for "
+                                        "simplified Chinese, etc."
+                                    ),
+                                )
+                                text_preservation_min_confidence = gr.Slider(
+                                    minimum=0.0,
+                                    maximum=1.0,
+                                    value=0.3,
+                                    step=0.05,
+                                    label="Min OCR Confidence",
+                                    info=(
+                                        "Drop OCR hits below this score. "
+                                        "0.3 keeps most text; raise to 0.5+ "
+                                        "to filter noise on low-quality scans."
+                                    ),
+                                )
+
+                        with gr.Accordion(
                             "Face Swap (post-processing)", open=False
                         ) as face_swap_accordion:
                             gr.Markdown(
@@ -1028,6 +1100,11 @@ def create_ui(context: Mapping[str, Any]):
                 upscale_model_inline,
                 upscale_target_scale_inline,
                 upscale_tile_inline,
+                # Text preservation (OCR source, repaint on output)
+                enable_text_preservation,
+                text_preservation_source,
+                text_preservation_languages,
+                text_preservation_min_confidence,
             ],
             outputs=[output_image, seed_info],
             show_progress=True,

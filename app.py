@@ -2750,6 +2750,10 @@ def generate_image(
         upscale_model=upscale_model,
         upscale_target_scale=upscale_target_scale,
         upscale_tile=upscale_tile,
+        enable_text_preservation=enable_text_preservation,
+        text_preservation_source=text_preservation_source,
+        text_preservation_languages=text_preservation_languages,
+        text_preservation_min_confidence=text_preservation_min_confidence,
         progress_callback=progress,
     )
 

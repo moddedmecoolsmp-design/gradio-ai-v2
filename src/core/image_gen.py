@@ -70,6 +70,16 @@ class ImageGenerator:
         upscale_model: Optional[str] = None,
         upscale_target_scale: Optional[float] = None,
         upscale_tile: int = 512,
+        # ---- Text preservation (OCR the source, repaint on output) -----
+        # Target use case: manga / comic / caption-heavy source images
+        # where the diffusion model reliably garbles or deletes text.
+        # We OCR the source at pipeline start (while the model loads),
+        # then repaint the text on the final image after upscale so the
+        # preserved text ends up at the intended resolution.
+        enable_text_preservation: bool = False,
+        text_preservation_source: Optional[Any] = None,
+        text_preservation_languages: Optional[List[str]] = None,
+        text_preservation_min_confidence: float = 0.3,
         # Internal callers (e.g. the Klein Hi-Res LoRA upscale path in
         # ``src/image/upscaler_ui.py``) reuse ``generate`` for its
         # pipeline/LoRA/offload machinery but do *not* want the

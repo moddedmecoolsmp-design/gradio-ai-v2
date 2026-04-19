@@ -232,6 +232,57 @@ def _install_upscaler_stack() -> Dict[str, str]:
     return results
 
 
+def _install_text_preservation_stack() -> Dict[str, str]:
+    """
+    Install the OCR runtime for the text-preservation feature.
+
+    ``easyocr`` is the default OCR engine: it runs natively on CUDA
+    (through the user's existing torch build), works on CUDA 13
+    without any build-step, and ships its own detection + recognition
+    weights auto-downloaded from GitHub on first use.
+
+    We deliberately install with ``--no-deps`` so pip can't wander off
+    and replace the user's CUDA-pinned torch with a CPU wheel to
+    satisfy easyocr's loose torch requirement; easyocr's other
+    runtime deps (``numpy``, ``Pillow``, ``opencv-python``,
+    ``scipy``, ``scikit-image``, ``pyyaml``, ``python-bidi``) are
+    either already in this project's requirements or pulled in by
+    other optional stacks.  If the import still fails after the
+    ``--no-deps`` install we install the missing transitive packages
+    one-by-one from a curated whitelist, again avoiding torch.
+    """
+    results: Dict[str, str] = {}
+    if _module_importable("easyocr"):
+        results["easyocr"] = "present"
+        return results
+
+    ok, message = _pip_install(["easyocr", "--no-deps"])
+    if ok and _module_importable("easyocr"):
+        results["easyocr"] = "installed"
+        return results
+
+    # Fall back: install the non-torch transitive deps explicitly, then
+    # retry.  Everything below is CUDA-13 safe (pure Python or numpy
+    # C-ext that already matches the user's Python ABI).
+    for dep in [
+        "python-bidi",
+        "pyclipper",
+        "shapely",
+        "scikit-image",
+        "ninja",
+    ]:
+        if not _module_importable(dep.replace("-", "_")):
+            _pip_install([dep])
+
+    ok, message = _pip_install(["easyocr", "--no-deps"])
+    results["easyocr"] = (
+        "installed" if ok and _module_importable("easyocr") else "failed"
+    )
+    if not ok:
+        print(f"  [accelerator-installer] easyocr install skipped: {message}")
+    return results
+
+
 def _install_face_swap_stack() -> Dict[str, str]:
     """
     Install the face-swap runtime stack if the user has toggled face swap
