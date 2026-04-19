@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Mapping
 from src.constants import BUILTIN_LORA_CHOICES
 from src.image import faceswap_config, faceswap_ui
 from src.image import upscaler as upscaler_helper
 from src.image import upscaler_ui
+
+
+def _component_kwargs(component_cls, **kwargs):
+    """Drop kwargs that older Gradio builds do not support for a component."""
+    try:
+        supported = inspect.signature(component_cls.__init__).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in supported}
 
 def on_builtin_lora_change(builtin_lora):
     """Toggle file upload visibility based on built-in LoRA selection."""
@@ -68,13 +78,17 @@ def create_ui(context: Mapping[str, Any]):
                                     visible=True,
                                 )
                                 input_images = gr.Gallery(
-                                    label="Input Images",
-                                    type="pil",
-                                    value=persisted_input_images,
-                                    visible=True,
-                                    columns=3,
-                                    height="auto",
-                                    interactive=True,
+                                    **_component_kwargs(
+                                        gr.Gallery,
+                                        label="Input Images",
+                                        type="pil",
+                                        value=persisted_input_images,
+                                        visible=True,
+                                        columns=3,
+                                        height="auto",
+                                        interactive=True,
+                                        buttons=["download", "fullscreen"],
+                                    )
                                 )
                                 resolution_preset = gr.Radio(
                                     choices=SINGLE_RESOLUTION_PRESETS,
@@ -181,7 +195,13 @@ def create_ui(context: Mapping[str, Any]):
 
                     with gr.Column(scale=1):
                         output_image = gr.Image(
-                            label="Generated Image", type="pil", format="png"
+                            **_component_kwargs(
+                                gr.Image,
+                                label="Generated Image",
+                                type="pil",
+                                format="png",
+                                buttons=["download", "fullscreen"],
+                            )
                         )
                         send_to_upscaler_btn = gr.Button(
                             "Send to Upscaler", size="sm", variant="secondary"
@@ -199,29 +219,33 @@ def create_ui(context: Mapping[str, Any]):
                             )
                             preservation_enable = gr.Checkbox(
                                 label="Enable Preservation",
-                                value=False,
+                                value=initial_state.get("preservation_enable", False),
                                 info="When off, the preservation reference is ignored.",
                             )
                             preservation_input = gr.Image(
-                                label="Pose / Expression Reference",
-                                type="pil",
-                                sources=["upload", "clipboard"],
-                                height=200,
+                                **_component_kwargs(
+                                    gr.Image,
+                                    label="Pose / Expression Reference",
+                                    type="pil",
+                                    sources=["upload", "clipboard"],
+                                    height=200,
+                                    buttons=["download", "fullscreen"],
+                                )
                             )
                             with gr.Row():
                                 preservation_detector = gr.Dropdown(
-                                    choices=["dwpose", "openpose"],
-                                    value="dwpose",
+                                    choices=["DWPose", "OpenPose"],
+                                    value=initial_state.get("preservation_detector", "DWPose"),
                                     label="Detector",
                                     info="DWPose is more accurate; OpenPose is a classical fallback.",
                                 )
                                 preservation_mode = gr.Dropdown(
                                     choices=[
-                                        "body",
-                                        "body_face",
-                                        "body_face_hands",
+                                        "Pose",
+                                        "Pose + Expression",
+                                        "Pose + Expression + Hands",
                                     ],
-                                    value="body_face",
+                                    value=initial_state.get("preservation_mode", "Pose + Expression"),
                                     label="Mode",
                                     info="body_face includes facial expression landmarks.",
                                 )
@@ -233,17 +257,12 @@ def create_ui(context: Mapping[str, Any]):
                             # FLUX.2-klein only — silent no-op on Z-Image.
                             enable_expression_transfer = gr.Checkbox(
                                 label="Klein Face Expression Transfer LoRA",
-                                value=False,
+                                value=initial_state.get("enable_expression_transfer", False),
                                 info=(
                                     "Loads the v2658175 LoRA and prepends its "
                                     "trigger phrase. Expression-focused; "
-                                    "FLUX.2-klein only."
                                 ),
                             )
-
-                        with gr.Accordion(
-                            "Upscale after generation", open=False
-                        ) as upscale_inline_accordion:
                             gr.Markdown(
                                 "Run the selected Real-ESRGAN model on the "
                                 "generated image immediately after face swap. "
@@ -324,16 +343,24 @@ def create_ui(context: Mapping[str, Any]):
                             for slot_idx in range(faceswap_ui.MAX_FACE_SLOTS):
                                 with gr.Row(visible=False) as slot_row:
                                     thumb = gr.Image(
-                                        label=f"Detected Face #{slot_idx + 1}",
-                                        type="pil",
-                                        interactive=False,
-                                        height=160,
+                                        **_component_kwargs(
+                                            gr.Image,
+                                            label=f"Detected Face #{slot_idx + 1}",
+                                            type="pil",
+                                            interactive=False,
+                                            height=160,
+                                            buttons=["download", "fullscreen"],
+                                        )
                                     )
                                     source_img = gr.Image(
-                                        label=f"Swap To (Source #{slot_idx + 1})",
-                                        type="pil",
-                                        sources=["upload", "clipboard"],
-                                        height=160,
+                                        **_component_kwargs(
+                                            gr.Image,
+                                            label=f"Swap To (Source #{slot_idx + 1})",
+                                            type="pil",
+                                            sources=["upload", "clipboard"],
+                                            height=160,
+                                            buttons=["download", "fullscreen"],
+                                        )
                                     )
                                     with gr.Column():
                                         char_pick = gr.Dropdown(
@@ -459,6 +486,11 @@ def create_ui(context: Mapping[str, Any]):
                     info="1.0 = full effect, 0.5 = half effect.",
                     visible=False,
                 )
+                use_preset_values = gr.Checkbox(
+                    label="Apply Preset Settings",
+                    value=True,
+                    info="When enabled, presets set strength, guidance, and steps. Disable to keep your manual settings.",
+                )
 
                 gr.Markdown("### Model Quality")
                 enable_klein_anatomy_fix = gr.Checkbox(
@@ -510,11 +542,15 @@ def create_ui(context: Mapping[str, Any]):
                     )
                 gr.Markdown("#### Saved Characters")
                 character_gallery = gr.Gallery(
-                    label="Saved Characters",
-                    value=[],
-                    columns=4,
-                    height="auto",
-                    interactive=False,
+                    **_component_kwargs(
+                        gr.Gallery,
+                        label="Saved Characters",
+                        value=[],
+                        columns=4,
+                        height="auto",
+                        interactive=False,
+                        buttons=["download", "fullscreen"],
+                    )
                 )
                 with gr.Row():
                     char_upload_name = gr.Textbox(
@@ -523,10 +559,14 @@ def create_ui(context: Mapping[str, Any]):
                         lines=1,
                     )
                     char_upload_image = gr.Image(
-                        label="Reference Photo",
-                        type="pil",
-                        sources=["upload", "clipboard"],
-                        height=200,
+                        **_component_kwargs(
+                            gr.Image,
+                            label="Reference Photo",
+                            type="pil",
+                            sources=["upload", "clipboard"],
+                            buttons=["download", "fullscreen"],
+                            height=200,
+                        )
                     )
                 with gr.Row():
                     char_save_btn = gr.Button(
@@ -560,10 +600,20 @@ def create_ui(context: Mapping[str, Any]):
                 with gr.Row():
                     with gr.Column(scale=1):
                         upscale_input_image = gr.Image(
-                            label="Input Image",
-                            type="pil",
-                            sources=["upload", "clipboard"],
-                            height=360,
+                            **_component_kwargs(
+                                gr.Image,
+                                label="Input Image",
+                                type="pil",
+                                sources=["upload", "clipboard"],
+                                height=360,
+                                buttons=["download", "fullscreen"],
+                            )
+                        )
+                        upscale_input_resolution = gr.Markdown(
+                            "**Input Resolution:** No image uploaded"
+                        )
+                        upscale_output_preview = gr.Markdown(
+                            "**Output Preview:** Upload an image to see preview"
                         )
                         upscale_model_tab = gr.Dropdown(
                             choices=upscaler_helper.get_all_model_choices(),
@@ -595,10 +645,14 @@ def create_ui(context: Mapping[str, Any]):
                         )
                     with gr.Column(scale=1):
                         upscale_output_image = gr.Image(
-                            label="Upscaled Image",
-                            type="pil",
-                            format="png",
-                            height=360,
+                            **_component_kwargs(
+                                gr.Image,
+                                label="Upscaled Image",
+                                type="pil",
+                                format="png",
+                                height=360,
+                                buttons=["download", "fullscreen"],
+                            )
                         )
                         upscale_status = gr.Textbox(
                             label="Status",
@@ -628,7 +682,7 @@ def create_ui(context: Mapping[str, Any]):
                         1.0,
                         value=initial_state.get("img2img_strength", 0.6),
                         step=0.05,
-                        label="Image Edit Strength (Z-Image)",
+                        label="Image Edit Strength (img2img)",
                         info="How much the source image changes. 0.3 = subtle, 0.8 = heavy rework.",
                     )
                     with gr.Row():
@@ -799,6 +853,12 @@ def create_ui(context: Mapping[str, Any]):
                 batch_resolution_preset,
                 video_resolution_preset,
                 batch_tab,
+                enable_klein_anatomy_fix,
+                enable_expression_transfer,
+                preservation_enable,
+                preservation_input,
+                preservation_detector,
+                preservation_mode,
             ],
         )
 
@@ -822,6 +882,12 @@ def create_ui(context: Mapping[str, Any]):
                 batch_resolution_preset,
                 video_resolution_preset,
                 batch_tab,
+                enable_klein_anatomy_fix,
+                enable_expression_transfer,
+                preservation_enable,
+                preservation_input,
+                preservation_detector,
+                preservation_mode,
             ],
         )
 
@@ -860,6 +926,7 @@ def create_ui(context: Mapping[str, Any]):
                 builtin_lora,
                 lora_strength,
                 guidance_scale,
+                use_preset_values,
             ],
             outputs=[
                 prompt,
@@ -891,6 +958,10 @@ def create_ui(context: Mapping[str, Any]):
             seed,
             guidance_scale,
             enable_klein_anatomy_fix,
+            enable_expression_transfer,
+            preservation_enable,
+            preservation_detector,
+            preservation_mode,
             device,
             lora_file,
             builtin_lora,
@@ -1013,6 +1084,18 @@ def create_ui(context: Mapping[str, Any]):
         # --------------------------------------------------------------
         # Upscale tab wiring
         # --------------------------------------------------------------
+        # Update resolution info when input image changes
+        upscale_input_image.change(
+            fn=upscaler_ui.update_upscale_resolution_info,
+            inputs=[upscale_input_image, upscale_target_scale_tab],
+            outputs=[upscale_input_resolution, upscale_output_preview],
+        )
+        # Update output preview when target scale changes
+        upscale_target_scale_tab.change(
+            fn=upscaler_ui.update_upscale_resolution_info,
+            inputs=[upscale_input_image, upscale_target_scale_tab],
+            outputs=[upscale_input_resolution, upscale_output_preview],
+        )
         upscale_run_btn.click(
             fn=upscaler_ui.run_upscale,
             inputs=[
@@ -1081,6 +1164,31 @@ def create_ui(context: Mapping[str, Any]):
             fn=update_lora_strength,
             inputs=[lora_strength],
             outputs=[seed_info],
+        )
+        use_preset_values.change(
+            fn=apply_prompt_preset,
+            inputs=[
+                preset_choice,
+                prompt,
+                negative_prompt,
+                img2img_strength,
+                steps,
+                lora_file,
+                builtin_lora,
+                lora_strength,
+                guidance_scale,
+                use_preset_values,
+            ],
+            outputs=[
+                prompt,
+                negative_prompt,
+                img2img_strength,
+                steps,
+                lora_file,
+                builtin_lora,
+                lora_strength,
+                guidance_scale,
+            ],
         )
         builtin_lora.change(
             fn=on_builtin_lora_change,

@@ -224,6 +224,26 @@ def safe_int_value(value, default: int) -> int:
         return default
 
 
+def normalize_pose_detector(value) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"dwpose", "dwpose"}:
+        return "dwpose"
+    if text in {"openpose", "open pose"}:
+        return "openpose"
+    return "dwpose"
+
+
+def normalize_pose_mode(value) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"pose", "body"}:
+        return "body"
+    if text in {"pose + expression", "body_face"}:
+        return "body_face"
+    if text in {"pose + expression + hands", "body_face_hands"}:
+        return "body_face_hands"
+    return "body_face"
+
+
 def coerce_float(value, default: float) -> float:
     try:
         if value is None:
@@ -285,6 +305,18 @@ def build_initial_state(available_devices, default_device):
     seed = clamp_int(persisted_state.seed, -1, (2**32 - 1), -1)
     guidance_scale = clamp_float(persisted_state.guidance_scale, 0.0, 10.0, 1.0)
     enable_klein_anatomy_fix = get_bool(persisted_state.enable_klein_anatomy_fix, fallback=False)
+    enable_expression_transfer = get_bool(persisted_state.enable_expression_transfer, fallback=False)
+    preservation_enable = get_bool(persisted_state.preservation_enable, fallback=False)
+    preservation_detector = sanitize_choice(
+        persisted_state.preservation_detector,
+        ["DWPose", "OpenPose"],
+        "DWPose",
+    )
+    preservation_mode = sanitize_choice(
+        persisted_state.preservation_mode,
+        ["Pose", "Pose + Expression", "Pose + Expression + Hands"],
+        "Pose",
+    )
     lora_strength = clamp_float(persisted_state.lora_strength, 0.0, 2.0, 1.0)
 
     device = sanitize_choice(persisted_state.device, available_devices, default_device)
@@ -377,6 +409,10 @@ def build_initial_state(available_devices, default_device):
         "seed": seed,
         "guidance_scale": guidance_scale,
         "enable_klein_anatomy_fix": enable_klein_anatomy_fix,
+        "enable_expression_transfer": enable_expression_transfer,
+        "preservation_enable": preservation_enable,
+        "preservation_detector": preservation_detector,
+        "preservation_mode": preservation_mode,
         "device": device,
         "lora_file": lora_file,
         "builtin_lora": persisted_state.builtin_lora if hasattr(persisted_state, "builtin_lora") else None,
@@ -410,6 +446,10 @@ def persist_ui_state(
     seed,
     guidance_scale,
     enable_klein_anatomy_fix,
+    enable_expression_transfer,
+    preservation_enable,
+    preservation_detector,
+    preservation_mode,
     device,
     lora_file,
     builtin_lora,
@@ -443,6 +483,10 @@ def persist_ui_state(
         seed=safe_int_value(seed, -1),
         guidance_scale=float(guidance_scale) if guidance_scale is not None else 0.0,
         enable_klein_anatomy_fix=bool(enable_klein_anatomy_fix),
+        enable_expression_transfer=bool(enable_expression_transfer),
+        preservation_enable=bool(preservation_enable),
+        preservation_detector=preservation_detector or "DWPose",
+        preservation_mode=preservation_mode or "Pose",
         device=device,
         lora_file=lora_file if lora_file else None,
         builtin_lora=builtin_lora if builtin_lora else None,
@@ -559,12 +603,20 @@ def is_windows_fast_flux_device(device: str) -> bool:
     )
 
 
-def apply_prompt_preset(preset_name, current_prompt, current_negative, current_strength, current_steps, current_lora_file, current_builtin_lora, current_lora_strength, current_guidance):
+def apply_prompt_preset(preset_name, current_prompt, current_negative, current_strength, current_steps, current_lora_file, current_builtin_lora, current_lora_strength, current_guidance, use_preset_values=True):
     if preset_name in ANIME_PHOTO_PRESETS:
         preset = ANIME_PHOTO_PRESETS[preset_name]
-        strength = preset.get("strength", current_strength)
-        steps = preset.get("steps", current_steps)
-        guidance = preset.get("guidance_scale", current_guidance)
+        
+        # When use_preset_values is True, apply preset values for img2img_strength, guidance, steps
+        # When False, preserve current manual values
+        if use_preset_values:
+            strength = preset.get("strength", current_strength)
+            steps = preset.get("steps", current_steps)
+            guidance = preset.get("guidance_scale", current_guidance)
+        else:
+            strength = current_strength
+            steps = current_steps
+            guidance = current_guidance
 
         # Resolve built-in LoRA references to actual file paths
         # Only return the path if the file exists; otherwise it will be
@@ -1077,7 +1129,7 @@ def _legacy_generate_image_impl(
     )
     will_enable_cpu_offload = pipeline_manager.should_enable_cpu_offload(
         pipeline_manager.current_model,
-        True,
+        enable_preservation,
         device,
     )
     pipe, optional_accelerator_status = pipeline_manager.prepare_flux_sdnq_optional_accelerators(
@@ -1733,14 +1785,19 @@ def _legacy_batch_process_folder_impl(
                         controlnet=cn,
                     )
                     # Setup extractor
-                    extractor_instance = get_pose_extractor(device=device, detector_type=pose_detector_type)
+                    normalized_pose_detector = normalize_pose_detector(pose_detector_type)
+                    normalized_pose_mode = normalize_pose_mode(pose_mode)
+                    extractor_instance = get_pose_extractor(
+                        device=device,
+                        detector_type=normalized_pose_detector,
+                    )
 
                     mode_map = {
-                        "Body Only": "body",
-                        "Body + Face": "body_face",
-                        "Body + Face + Hands": "body_face_hands"
+                        "body": "body",
+                        "body_face": "body_face",
+                        "body_face_hands": "body_face_hands",
                     }
-                    current_extraction_mode = mode_map.get(pose_mode, "body_face")
+                    current_extraction_mode = mode_map.get(normalized_pose_mode, "body_face")
                 else:
                     print("  ControlNet not available, disabling pose preservation for batch")
              except Exception as e:
@@ -1793,7 +1850,7 @@ def _legacy_batch_process_folder_impl(
                 extraction_mode=current_extraction_mode,
 
                 # Pose args
-                pose_detector_type=pose_detector_type,
+                pose_detector_type=normalize_pose_detector(pose_detector_type),
 
                 # Face Swap args
                 enable_faceswap=enable_faceswap,
@@ -2405,13 +2462,18 @@ def _legacy_process_video_impl(
                         transformer=pipe.transformer,
                         controlnet=cn,
                     )
-                    extractor_instance = get_pose_extractor(device=device, detector_type=pose_detector_type)
+                    normalized_pose_detector = normalize_pose_detector(pose_detector_type)
+                    normalized_pose_mode = normalize_pose_mode(pose_mode)
+                    extractor_instance = get_pose_extractor(
+                        device=device,
+                        detector_type=normalized_pose_detector,
+                    )
                     mode_map = {
-                        "Body Only": "body",
-                        "Body + Face": "body_face",
-                        "Body + Face + Hands": "body_face_hands",
+                        "body": "body",
+                        "body_face": "body_face",
+                        "body_face_hands": "body_face_hands",
                     }
-                    current_extraction_mode = mode_map.get(pose_mode, "body_face")
+                    current_extraction_mode = mode_map.get(normalized_pose_mode, "body_face")
                 else:
                     print("  ControlNet not available, disabling pose preservation for video")
             except Exception as e:
@@ -3109,6 +3171,7 @@ def update_ui_for_model(model_choice, images, width, height, downscale_factor, d
     """Update UI visibility and defaults based on model selection."""
     is_flux = is_flux_model(model_choice)
     is_zimage = is_zimage_model(model_choice)
+    is_klein = is_flux and "klein" in model_choice.lower()
     is_edit_model = should_show_edit_controls(model_choice)
     # Enable LoRA for all models now that we have custom quantized support
     show_lora = True
@@ -3120,6 +3183,9 @@ def update_ui_for_model(model_choice, images, width, height, downscale_factor, d
 
     # Batch folder processing is FLUX-only (Z-Image not supported).
     show_batch = is_flux
+
+    # Klein-specific features: only show for Klein models
+    show_klein_features = is_klein
 
     single_preset = resolve_resolution_preset_for_model(model_choice, mode="single", device=device)
     batch_preset = resolve_resolution_preset_for_model(model_choice, mode="batch", device=device)
@@ -3158,6 +3224,12 @@ def update_ui_for_model(model_choice, images, width, height, downscale_factor, d
         gr.update(value=batch_preset),  # batch_resolution_preset
         gr.update(value=video_preset),  # video_resolution_preset
         gr.update(visible=show_batch),  # batch_tab
+        gr.update(visible=show_klein_features),  # enable_klein_anatomy_fix
+        gr.update(visible=show_klein_features),  # enable_expression_transfer
+        gr.update(visible=show_klein_features),  # preservation_enable
+        gr.update(visible=show_klein_features),  # preservation_input
+        gr.update(visible=show_klein_features),  # preservation_detector
+        gr.update(visible=show_klein_features),  # preservation_mode
     )
 
 

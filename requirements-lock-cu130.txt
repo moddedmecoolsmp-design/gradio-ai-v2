@@ -9,7 +9,7 @@ safetensors==0.6.2
 huggingface_hub[hf_xet]==0.36.2
 diffusers @ git+https://github.com/huggingface/diffusers@14f5ef3c0efa36dc6da8a44f1cdc893f10dc52f5
 sdnq @ git+https://github.com/Disty0/sdnq.git@feb9659b130d7409a96b659347a19a28fe212c5f
-gradio==6.5.1
+gradio==6.12.0
 pillow==10.4.0
 peft==0.17.0
 scipy==1.16.3

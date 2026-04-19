@@ -26,11 +26,11 @@ KLEIN_HIRES_LORA_URL = "https://civitai.com/api/download/models/2739957"
 KLEIN_HIRES_LORA_TRIGGER = "High resolution"
 KLEIN_HIRES_LORA_STRENGTH = 0.9
 
-# Face Expression Transfer LoRA (v2658175, 88 MB) — quality complement to
+# Face Expression Transfer LoRA (v2363566, 88 MB) — quality complement to
 # DWPose preservation.  Trained for illustration expression transfer via
 # a dual-image trigger word, so it skips the DWPose extraction step
-# entirely.  Strength ~1.0.
-KLEIN_EXPRESSION_LORA_URL = "https://civitai.com/api/download/models/2658175"
+# entirely.  Strength ~1.0.  This is the 4B version (model 2363566).
+KLEIN_EXPRESSION_LORA_URL = "https://civitai.com/api/download/models/2363566"
 KLEIN_EXPRESSION_LORA_TRIGGER = (
     "transfer character face expression in image1 "
     "with character face expression in image2"

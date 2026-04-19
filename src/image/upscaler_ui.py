@@ -9,6 +9,7 @@ the UI framework.
 from __future__ import annotations
 
 import logging
+import __main__
 from typing import Optional, Tuple
 
 from PIL import Image
@@ -44,10 +45,7 @@ def _run_klein_hires_lora_upscale(
     ``upscaler_ui`` importable at app boot (app.py imports this module
     before instantiating the generator).
     """
-    try:
-        import app as _app  # type: ignore
-    except Exception as exc:  # pragma: no cover — app not importable in tests
-        return None, f"Klein Hi-Res LoRA upscale unavailable: {exc}"
+    _app = __main__
 
     gen = getattr(_app, "gen", None)
     pm = getattr(_app, "pipeline_manager", None)
@@ -214,9 +212,40 @@ def send_generated_to_upscaler(generated: Optional[Image.Image]) -> Optional[Ima
     return generated
 
 
+def update_upscale_resolution_info(image, target_scale):
+    """
+    Update the resolution display for the upscaler.
+    Returns (input_resolution_text, output_preview_text).
+    """
+    if image is None:
+        return (
+            "**Input Resolution:** No image uploaded",
+            "**Output Preview:** Upload an image to see preview"
+        )
+    
+    try:
+        img_width, img_height = image.size
+        scale = float(target_scale) if target_scale else 4.0
+        
+        # Calculate output dimensions
+        out_width = int(img_width * scale)
+        out_height = int(img_height * scale)
+        
+        input_text = f"**Input Resolution:** {img_width}×{img_height}"
+        output_text = f"**Output Preview:** {out_width}×{out_height} ({scale:g}x upscale)"
+        
+        return input_text, output_text
+    except Exception:
+        return (
+            "**Input Resolution:** Unable to determine",
+            "**Output Preview:** Unable to calculate"
+        )
+
+
 __all__ = [
     "run_upscale",
     "send_generated_to_upscaler",
+    "update_upscale_resolution_info",
     "MODELS",
     "DEFAULT_MODEL",
 ]

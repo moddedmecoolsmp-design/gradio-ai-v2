@@ -81,6 +81,11 @@ os.makedirs(LORA_DIR, exist_ok=True)
 CACHE_ROOT = os.environ.get("UFIG_CACHE_DIR", os.path.join(BASE_DIR, "cache"))
 HF_HOME = os.environ.get("HF_HOME", os.path.join(CACHE_ROOT, "huggingface"))
 
+# ---------------------------------------------------------------------------
+# API Keys (override via environment variables)
+# ---------------------------------------------------------------------------
+CIVITAI_API_TOKEN = os.environ.get("CIVITAI_API_TOKEN", "2e9ca58a0eac002a139f12ec096d4bd8")
+
 os.environ.setdefault("HF_HOME", HF_HOME)
 os.environ.setdefault("HF_HUB_CACHE", os.path.join(HF_HOME, "hub"))
 os.environ.setdefault("HF_XET_CACHE", os.path.join(HF_HOME, "xet"))
