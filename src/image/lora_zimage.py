@@ -20,6 +20,27 @@ LINEAR_MODULES = ['Linear', 'LoRACompatibleLinear', 'QLinear', 'SDNQLinear']
 CONV_MODULES = ['Conv2d', 'LoRACompatibleConv', 'QConv2d', 'SDNQConv2d']
 
 
+def _convert_flux2_lora_to_diffusers_state_dict(weights: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Convert Flux2-style LoRA keys into diffusers' canonical Flux2 layout when needed."""
+    if not any(
+        key.startswith(("diffusion_model.", "double_blocks.", "single_blocks."))
+        for key in weights
+    ):
+        return dict(weights)
+
+    try:
+        from diffusers.loaders.lora_conversion_utils import _convert_non_diffusers_flux2_lora_to_diffusers
+    except Exception as exc:
+        print(f"  Warning: Flux2 LoRA conversion helper unavailable: {exc}")
+        return dict(weights)
+
+    try:
+        return _convert_non_diffusers_flux2_lora_to_diffusers(dict(weights))
+    except Exception as exc:
+        print(f"  Warning: Flux2 LoRA conversion helper failed: {exc}")
+        return dict(weights)
+
+
 class LoRAModule(nn.Module):
     """
     A single LoRA module that wraps an existing layer.
@@ -144,12 +165,12 @@ class LoRANetwork(nn.Module):
         target_modules: Optional[List[str]] = None,
     ):
         super().__init__()
-        self.transformer = transformer
         self.lora_dim = lora_dim
         self.alpha = alpha
         self._multiplier = multiplier
         self.is_active = False
         self.lora_modules: List[LoRAModule] = []
+        self.transformer_ref = weakref.ref(transformer)
 
         target_modules = target_modules or self.TARGET_MODULES
 
@@ -227,13 +248,25 @@ class LoRANetwork(nn.Module):
             print(f"Loading LoRA weights from {weights}")
             weights = load_file(weights)
 
+        # Debug: Show first few original keys
+        sample_keys = list(weights.keys())[:3]
+        print(f"  Original LoRA keys: {sample_keys}")
+
         # Detect format and convert keys
         converted_weights = self._convert_weight_keys(weights)
+
+        # Debug: Show first few converted keys
+        sample_converted = list(converted_weights.keys())[:3]
+        print(f"  Converted keys: {sample_converted}")
 
         # Build mapping from weight keys to our module names
         current_state = self.state_dict()
         load_dict = {}
         missing_keys = []
+
+        # Debug: Show first few network keys
+        sample_network = list(current_state.keys())[:3]
+        print(f"  Network module keys: {sample_network}")
 
         for key, value in converted_weights.items():
             if key in current_state:
@@ -245,21 +278,27 @@ class LoRANetwork(nn.Module):
                 missing_keys.append(key)
 
         if missing_keys:
-            print(f"Warning: {len(missing_keys)} keys not found in network")
+            print(f"  Warning: {len(missing_keys)}/{len(converted_weights)} keys not found in network")
+            # Debug: show first few missing
+            if missing_keys:
+                print(f"    First missing: {missing_keys[:2]}")
 
         # Load the weights
         info = self.load_state_dict(load_dict, strict=False)
-        print(f"Loaded {len(load_dict)} weight tensors")
+        print(f"  Loaded {len(load_dict)}/{len(converted_weights)} weight tensors into {len(self.lora_modules)} LoRA modules")
 
         return info
 
     def _convert_weight_keys(self, weights: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Convert weight keys from various formats to our internal format."""
         converted = {}
+        weights = _convert_flux2_lora_to_diffusers_state_dict(weights)
 
         for key, value in weights.items():
             # Skip alpha/rank tensors
             if key.endswith('.alpha') or key.endswith('_alpha') or key.endswith('.rank') or key.endswith('_rank'):
+                continue
+            if key.endswith(".bias"):
                 continue
 
             new_key = key
@@ -267,7 +306,7 @@ class LoRANetwork(nn.Module):
             # Handle common prefixes
             if new_key.startswith("diffusion_model."):
                 new_key = new_key.replace("diffusion_model.", "transformer.", 1)
-            elif not new_key.startswith("transformer."):
+            elif not new_key.startswith(("transformer.", "transformer_")):
                 new_key = "transformer." + new_key
 
             # PEFT/Standard LoRA format normalization

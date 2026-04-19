@@ -3,9 +3,12 @@ First-run auto-installer for optional inference accelerators.
 
 Targets the Windows + RTX 3070 fast path: on the first generation, this
 module probes for `sageattention` (SDPA drop-in, INT8 QK + FP16 PV) and
-`xformers` (memory-efficient attention fallback), and pip-installs the
-appropriate wheel pinned to the user's existing PyTorch build if either
-is missing.
+`xformers` (memory-efficient attention), and pip-installs the appropriate
+wheel pinned to the user's existing PyTorch build if either is missing.
+
+Note: For CUDA 13.0+, xformers is installed from HuggingFace community wheels
+(Wildminder/AI-windows-whl) since official PyTorch wheels don't exist for cu130.
+SageAttention is used as a fallback if xformers installation fails.
 
 Design notes:
   * Gated by the `UFIG_AUTO_INSTALL_ACCELERATORS` env var. Default is "1"
@@ -76,9 +79,60 @@ def _module_importable(module_name: str) -> bool:
     except ImportError:
         return False
     except Exception:
-        # Importable but broken install (e.g. dll mismatch). Treat as present
-        # so we don't blindly overwrite a user's pinned build.
+        # Importable but broken install (e.g. dll mismatch). Treat as unavailable
+        # so we can reinstall a working version.
+        return False
+
+
+def _xformers_is_compatible() -> bool:
+    """
+    Check if xformers is installed AND compatible with current PyTorch CUDA version.
+    
+    Returns True only if xformers can load its C++/CUDA extensions successfully.
+    A broken xformers (wrong CUDA version) will return False.
+    """
+    try:
+        import xformers
+        import torch
+        
+        # Get xformers build info
+        xformers_version = getattr(xformers, "__version__", "unknown")
+        
+        # Try to load the C++ extension - this will fail if CUDA versions mismatch
+        from xformers import ops
+        
+        # Check if we can actually use memory_efficient_attention
+        # This verifies CUDA extensions are loaded properly by running a minimal test
+        if hasattr(ops, "memory_efficient_attention"):
+            try:
+                # Create minimal test tensors and try to run attention
+                # This will actually exercise the CUDA code path and fail if incompatible
+                test_q = torch.randn(1, 8, 16, 64, dtype=torch.float16, device="cuda")
+                test_k = torch.randn(1, 8, 16, 64, dtype=torch.float16, device="cuda")
+                test_v = torch.randn(1, 8, 16, 64, dtype=torch.float16, device="cuda")
+                
+                # Try to run memory_efficient_attention - this will fail with CUDA mismatch
+                _ = ops.memory_efficient_attention(test_q, test_k, test_v)
+                
+                # Clean up
+                del test_q, test_k, test_v
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                
+                return True
+            except Exception as e:
+                error_msg = str(e)
+                if "CUDA" in error_msg or "xFormers" in error_msg:
+                    print(f"  [accelerator-installer] xformers CUDA incompatible: {error_msg[:100]}")
+                return False
+        
         return True
+    except ImportError:
+        return False
+    except Exception as e:
+        # xformers is installed but broken (CUDA mismatch)
+        print(f"  [accelerator-installer] xformers compatibility check failed: {e}")
+        return False
 
 
 def _pip_install(args: List[str]) -> Tuple[bool, str]:
@@ -97,6 +151,28 @@ def _pip_install(args: List[str]) -> Tuple[bool, str]:
 
     if result.returncode == 0:
         return True, (result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "ok")
+
+    tail = (result.stderr.strip() or result.stdout.strip()).splitlines()
+    message = tail[-1] if tail else f"pip returned {result.returncode}"
+    return False, message
+
+
+def _pip_uninstall(args: List[str]) -> Tuple[bool, str]:
+    """Run `python -m pip uninstall ...` quietly and return (ok, message)."""
+    cmd = [sys.executable, "-m", "pip", "uninstall", "--disable-pip-version-check", "--no-input", *args]
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        return False, f"pip invocation failed: {exc}"
+
+    if result.returncode == 0:
+        return True, "uninstalled"
 
     tail = (result.stderr.strip() or result.stdout.strip()).splitlines()
     message = tail[-1] if tail else f"pip returned {result.returncode}"
@@ -133,25 +209,80 @@ def _install_xformers() -> str:
     xformers requirement — breaking the rest of the app.
 
     Strategy:
-      1. `--no-deps`: install the xformers wheel without letting pip touch
+      1. Check if xformers is installed but incompatible (CUDA version mismatch).
+         If so, uninstall it first to prepare for clean installation.
+      2. CUDA 13.0+: Install from HuggingFace community wheels
+         (Wildminder/AI-windows-whl) since official PyTorch wheels don't
+         exist for cu130. These are ABI3 wheels compatible with Python 3.9+.
+      3. `--no-deps`: install the xformers wheel without letting pip touch
          torch. If the ABI happens to line up with the user's torch, this
          works. If not, the import will fail and we report "failed" — the
-         pipeline already falls back to SDPA in that case.
-      2. As a conservative second attempt we try the normal resolution,
+         pipeline already falls back to SDPA/sageattention in that case.
+      4. As a conservative second attempt we try the normal resolution,
          which is fine for users with a plain PyPI torch build but may
          shuffle torch on CUDA-pinned environments. We only take this
          second path if the user's torch is a vanilla release (no "+cuXXX"
          local version suffix) so we don't clobber CUDA-enabled builds.
     """
-    if _module_importable("xformers"):
+    # The current Windows + Python 3.13 runtime is a known bad fit for the
+    # available xformers wheels in this project. Importing the package can
+    # hard-crash the interpreter during extension registration, so we skip
+    # probing entirely and rely on the safer SDPA/SageAttention path.
+    if sys.version_info >= (3, 13):
+        return "skipped"
+
+    # Check if xformers is already installed and working
+    if _xformers_is_compatible():
         return "present"
+    
+    # If xformers is installed but incompatible, uninstall it first
+    if _module_importable("xformers"):
+        print("  [accelerator-installer] xformers installed but incompatible, uninstalling...")
+        _pip_uninstall(["xformers", "-y"])
 
     torch_tag: Optional[str] = None
+    torch_cuda_version: Optional[str] = None
     try:
         import torch  # noqa: WPS433
         torch_tag = str(torch.__version__)
+        # Extract CUDA version from torch (e.g., "2.10.0+cu130" → "13.0")
+        if "+" in torch_tag:
+            cuda_part = torch_tag.split("+")[1].replace("cu", "")
+            # Convert compact format (e.g., "130") to dotted format (e.g., "13.0")
+            if len(cuda_part) == 3 and cuda_part.isdigit():
+                torch_cuda_version = f"{cuda_part[:-1]}.{cuda_part[-1]}"
+            else:
+                torch_cuda_version = cuda_part
     except Exception:
         torch_tag = None
+        torch_cuda_version = None
+
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+    # CUDA 13.0+: Use HuggingFace community wheels (no official PyTorch wheels exist)
+    # ABI3 wheels work with Python 3.9-3.13+
+    if torch_cuda_version and float(torch_cuda_version) >= 13.0:
+        # Map PyTorch version to compatible wheel
+        torch_ver_short = torch_tag.split("+")[0] if torch_tag and "+" in torch_tag else None
+        if torch_ver_short:
+            torch_major_minor = ".".join(torch_ver_short.split(".")[:2])  # "2.10.0" -> "2.10"
+        else:
+            torch_major_minor = "2.10"  # Default fallback
+
+        # Community wheel URLs from Wildminder/AI-windows-whl (HuggingFace)
+        # Correct format: xformers-0.0.33+cu130torch2.10-cp39-abi3-win_amd64.whl
+        HF_WHEEL_URLS = {
+            "2.10": "https://huggingface.co/Wildminder/AI-windows-whl/resolve/main/xformers-0.0.33+cu130torch2.10-cp39-abi3-win_amd64.whl",
+            "2.11": "https://huggingface.co/Wildminder/AI-windows-whl/resolve/main/xformers-0.0.33+cu130torch2.11-cp39-abi3-win_amd64.whl",
+        }
+
+        wheel_url = HF_WHEEL_URLS.get(torch_major_minor, HF_WHEEL_URLS["2.10"])
+        print(f"  [accelerator-installer] Installing xformers for CUDA {torch_cuda_version} from HuggingFace...")
+        ok, message = _pip_install([wheel_url, "--no-deps"])
+        if ok and _xformers_is_compatible():
+            return "installed"
+        print(f"  [accelerator-installer] HuggingFace wheel failed: {message}")
+        # Fall through to standard install as last resort
 
     candidates: List[List[str]] = [["xformers", "--no-deps"]]
     # Only allow the unconstrained install on plain PyPI torch builds.
@@ -163,7 +294,7 @@ def _install_xformers() -> str:
 
     for args in candidates:
         ok, message = _pip_install(args)
-        if ok and _module_importable("xformers"):
+        if ok and _xformers_is_compatible():
             return "installed"
         print(f"  [accelerator-installer] xformers ({' '.join(args)}) skipped: {message}")
     return "failed"

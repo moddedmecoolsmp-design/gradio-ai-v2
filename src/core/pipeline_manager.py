@@ -95,7 +95,8 @@ class PipelineManager:
         # character face expression in image1 with character face expression
         # in image2", strength 1.0, ~88 MB).  Quality complement to DWPose
         # preservation — skips the pose-extraction pre-pass entirely.
-        self.klein_expression_lora_url = "https://civitai.com/api/download/models/2658175"
+        # This is the 4B version (model 2363566).
+        self.klein_expression_lora_url = "https://civitai.com/api/download/models/2363566"
         self.klein_expression_lora_path = os.path.join(self.loras_dir, "kleinFaceExpressionTransfer.safetensors")
 
         # Built-in anime-to-photoreal LoRAs
@@ -934,6 +935,8 @@ class PipelineManager:
     ) -> bool:
         if device != "cuda":
             return False
+        if not enable_pose_preservation:
+            return False
         if not is_flux_model(model_key):
             return False
         # Quantized models (SDNQ 4-bit, int8) are small enough to fit in GPU
@@ -942,9 +945,6 @@ class PipelineManager:
         # Only offload when VRAM is genuinely insufficient.
         vram_gb = get_device_vram_gb(device)
         if vram_gb is not None:
-            # SDNQ 4-bit needs ~5GB, int8 needs ~7GB — both fit in 8GB VRAM
-            if is_sdnq_or_quantized(model_key, None) and vram_gb >= 8:
-                return False
             # Non-quantized FLUX models need ~13GB+ — offload if under 12GB
             if not is_sdnq_or_quantized(model_key, None) and vram_gb < 12:
                 return True
@@ -962,7 +962,23 @@ class PipelineManager:
 
         dtype = torch.bfloat16 if device in ["cuda", "mps"] else torch.float32
         qtransformer = QuantizedFlux2Transformer2DModel.from_pretrained(model_path)
-        qtransformer.to(device=device, dtype=dtype)
+
+        def _safe_move(model):
+            try:
+                model.to(device=device, dtype=dtype)
+                return
+            except TypeError:
+                model.to(device=device)
+            except Exception:
+                model.to(device=device)
+            try:
+                model.to(dtype=dtype)
+            except TypeError:
+                pass
+            except Exception:
+                pass
+
+        _safe_move(qtransformer)
 
         config = AutoConfig.from_pretrained(f"{model_path}/text_encoder", trust_remote_code=True)
         with init_empty_weights():
@@ -973,13 +989,14 @@ class PipelineManager:
         state_dict = load_file(f"{model_path}/text_encoder/model.safetensors")
         requantize(text_encoder, state_dict=state_dict, quantization_map=qmap)
         text_encoder.eval()
-        text_encoder.to(device=device, dtype=dtype)
+        _safe_move(text_encoder)
 
         tokenizer = self._wrap_flux2_chat_template_tokenizer(
             AutoTokenizer.from_pretrained(f"{model_path}/tokenizer")
         )
 
         vae = self.get_flux2_small_decoder_vae(dtype)
+        print(f"  FLUX VAE: Using small decoder VAE (cached={str(dtype) in self.flux2_small_decoder_vaes})")
         Flux2PipelineClass = self.get_flux2_pipeline_class()
         pipe_kwargs = {
             "transformer": None,
@@ -1453,9 +1470,16 @@ class PipelineManager:
     def download_file(self, url, path, description="File", progress=None):
         """Download a file with progress tracking."""
         import requests
+        from src.config import CIVITAI_API_TOKEN
+
         print(f"Downloading {description} from {url} to {path}")
         try:
-            response = requests.get(url, stream=True, timeout=30)
+            headers = {}
+            # Add Civitai API token if URL is from Civitai and token is available
+            if "civitai.com" in url and CIVITAI_API_TOKEN:
+                headers["Authorization"] = f"Bearer {CIVITAI_API_TOKEN}"
+
+            response = requests.get(url, stream=True, timeout=30, headers=headers)
             response.raise_for_status()
             total_size = int(response.headers.get('content-length', 0))
             os.makedirs(os.path.dirname(path), exist_ok=True)

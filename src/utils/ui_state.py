@@ -23,6 +23,10 @@ class UIState:
     seed: int = -1
     guidance_scale: float = 0.0
     enable_klein_anatomy_fix: bool = False
+    enable_expression_transfer: bool = False
+    preservation_enable: bool = False
+    preservation_detector: str = "DWPose"
+    preservation_mode: str = "Pose"
     device: str = "cuda"
     lora_file: Optional[str] = None
     builtin_lora: Optional[str] = None
@@ -55,6 +59,10 @@ class UIState:
             "seed": self.seed,
             "guidance_scale": self.guidance_scale,
             "enable_klein_anatomy_fix": self.enable_klein_anatomy_fix,
+            "enable_expression_transfer": self.enable_expression_transfer,
+            "preservation_enable": self.preservation_enable,
+            "preservation_detector": self.preservation_detector,
+            "preservation_mode": self.preservation_mode,
             "device": self.device,
             "lora_file": self.lora_file,
             "builtin_lora": self.builtin_lora,
@@ -89,6 +97,10 @@ class UIState:
             seed=data.get("seed", -1),
             guidance_scale=data.get("guidance_scale", 0.0),
             enable_klein_anatomy_fix=data.get("enable_klein_anatomy_fix", False),
+            enable_expression_transfer=data.get("enable_expression_transfer", False),
+            preservation_enable=data.get("preservation_enable", False),
+            preservation_detector=data.get("preservation_detector", "DWPose"),
+            preservation_mode=data.get("preservation_mode", "Pose"),
             device=data.get("device", "cuda"),
             lora_file=data.get("lora_file", None),
             builtin_lora=data.get("builtin_lora", None),

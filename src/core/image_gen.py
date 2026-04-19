@@ -207,7 +207,19 @@ class ImageGenerator:
         # image trigger phrase so the model knows which reference slot
         # holds the expression to copy. Silent no-op on non-Klein models
         # (the LoRA weights don't map onto Z-Image / SDXL layers).
+        # Automation: when enabled without manual preservation_input, automatically
+        # use the first input image as reference for pose/expression extraction.
         if enable_expression_transfer and "flux2-klein" in current_model:
+            # Automatic mode: use first input image as reference if no manual input provided
+            if preservation_input is None and input_images and len(input_images) > 0:
+                preservation_input = input_images[0]
+                print(f"  [expression-transfer] automatic mode: using first input image as reference")
+            
+            # Enable preservation to extract pose/expression from reference image
+            if preservation_input is not None and not enable_preservation:
+                enable_preservation = True
+                print(f"  [expression-transfer] auto-enabled preservation for expression extraction")
+            
             try:
                 from src.constants import (
                     KLEIN_EXPRESSION_LORA_STRENGTH,
@@ -298,7 +310,7 @@ class ImageGenerator:
                     pass
         if hasattr(pipe, "enable_model_cpu_offload") and self.pm.should_enable_cpu_offload(
             current_model,
-            True,
+            enable_preservation,
             device,
         ):
             pipe.enable_model_cpu_offload()
