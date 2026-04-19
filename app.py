@@ -2689,6 +2689,12 @@ def generate_image(
     upscale_model=None,
     upscale_target_scale=None,
     upscale_tile=512,
+    # Text preservation — OCR the source, repaint on output. All four
+    # are optional so existing callers (batch, tests) keep working.
+    enable_text_preservation=False,
+    text_preservation_source=None,
+    text_preservation_languages=None,
+    text_preservation_min_confidence=0.3,
     progress=gr.Progress()
 ):
     STOP_EVENT.clear()

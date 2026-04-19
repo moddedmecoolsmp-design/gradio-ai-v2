@@ -376,6 +376,8 @@ def auto_install_accelerators(device: Optional[str] = None) -> Dict[str, str]:
         _INSTALL_STATE.update(_install_preservation_stack())
         print("  [accelerator-installer] first-run probe: checking upscaler stack...")
         _INSTALL_STATE.update(_install_upscaler_stack())
+        print("  [accelerator-installer] first-run probe: checking text-preservation stack...")
+        _INSTALL_STATE.update(_install_text_preservation_stack())
 
         if not _should_attempt(device):
             _INSTALL_STATE.setdefault("sageattention", "skipped")
