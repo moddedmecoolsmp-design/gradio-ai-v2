@@ -460,12 +460,43 @@ class ImageGenerator:
             except Exception as _ups_exc:
                 print(f"  [upscale] post-process skipped: {_ups_exc}")
 
+        # Text preservation: runs LAST so the repainted text lands on
+        # the final (post-face-swap, post-upscale) image at full output
+        # resolution. If no explicit source was passed, fall back to
+        # the first input/reference image — for manga-to-realistic the
+        # img2img source IS the text source. Skipped for internal
+        # recursive callers (``skip_face_swap=True``) so the Klein Hi-
+        # Res LoRA refine doesn't re-OCR + re-paint on top of its own
+        # post-face-swap output.
+        text_status: Optional[str] = None
+        if enable_text_preservation and not skip_face_swap:
+            try:
+                from src.image.text_preservation import preserve_text
+                tp_source = text_preservation_source
+                if tp_source is None and input_images:
+                    tp_source = input_images[0]
+                tp_langs = tuple(text_preservation_languages or ("en",))
+                image, text_status = preserve_text(
+                    tp_source,
+                    image,
+                    device=device,
+                    languages=tp_langs,
+                    min_confidence=float(text_preservation_min_confidence),
+                )
+                print(f"  [text-preservation] {text_status}")
+            except Exception as _text_exc:
+                # Best-effort — never fail the generation because OCR
+                # misbehaved.
+                print(f"  [text-preservation] skipped: {_text_exc}")
+
         fallback_info = f" | Note: {fallback_reason}" if fallback_reason else ""
         status = f"Seed: {seed} | Mode: {mode_str} | Model: {current_model} | Device: {device}{fallback_info}"
         if preservation_status:
             status += f" | {preservation_status}"
         if upscale_status:
             status += f" | {upscale_status}"
+        if text_status:
+            status += f" | {text_status}"
         return image, status
 
     def _scale_dims(self, w, h, factor):

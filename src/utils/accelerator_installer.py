@@ -263,16 +263,21 @@ def _install_text_preservation_stack() -> Dict[str, str]:
 
     # Fall back: install the non-torch transitive deps explicitly, then
     # retry.  Everything below is CUDA-13 safe (pure Python or numpy
-    # C-ext that already matches the user's Python ABI).
-    for dep in [
-        "python-bidi",
-        "pyclipper",
-        "shapely",
-        "scikit-image",
-        "ninja",
+    # C-ext that already matches the user's Python ABI).  The
+    # ``dep.replace("-", "_")`` shortcut is wrong for packages whose
+    # pip name differs from the importable module (python-bidi -> bidi,
+    # scikit-image -> skimage), so we spell them out as (pip, module)
+    # pairs to avoid redundant pip invocations when the packages are
+    # already present.
+    for pip_name, module_name in [
+        ("python-bidi", "bidi"),
+        ("pyclipper", "pyclipper"),
+        ("shapely", "shapely"),
+        ("scikit-image", "skimage"),
+        ("ninja", "ninja"),
     ]:
-        if not _module_importable(dep.replace("-", "_")):
-            _pip_install([dep])
+        if not _module_importable(module_name):
+            _pip_install([pip_name])
 
     ok, message = _pip_install(["easyocr", "--no-deps"])
     results["easyocr"] = (
