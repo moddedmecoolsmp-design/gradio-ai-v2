@@ -4,8 +4,10 @@ import logging
 from typing import List, Tuple, Optional
 from pydub import AudioSegment
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Library modules must not call ``logging.basicConfig`` — the first importer
+# wins and silently fixes the root handler/formatter for the whole process.
+# Logging configuration is the entry-point's responsibility; we just
+# acquire our named logger here.
 logger = logging.getLogger(__name__)
 
 class AudioSeparator:

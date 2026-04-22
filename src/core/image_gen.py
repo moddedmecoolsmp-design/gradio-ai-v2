@@ -70,6 +70,16 @@ class ImageGenerator:
         upscale_model: Optional[str] = None,
         upscale_target_scale: Optional[float] = None,
         upscale_tile: int = 512,
+        # ---- Text preservation (OCR the source, repaint on output) -----
+        # Target use case: manga / comic / caption-heavy source images
+        # where the diffusion model reliably garbles or deletes text.
+        # We OCR the source at pipeline start (while the model loads),
+        # then repaint the text on the final image after upscale so the
+        # preserved text ends up at the intended resolution.
+        enable_text_preservation: bool = False,
+        text_preservation_source: Optional[Any] = None,
+        text_preservation_languages: Optional[List[str]] = None,
+        text_preservation_min_confidence: float = 0.3,
         # Internal callers (e.g. the Klein Hi-Res LoRA upscale path in
         # ``src/image/upscaler_ui.py``) reuse ``generate`` for its
         # pipeline/LoRA/offload machinery but do *not* want the
@@ -136,6 +146,14 @@ class ImageGenerator:
 
         if self.stop_requested:
             return None, "Cancelled by user.", None
+
+        # Capture the user's original first input reference BEFORE the
+        # preservation block mutates ``input_images`` (it prepends a pose
+        # skeleton at index 0). Text preservation's source-image fallback
+        # at the end of the pipeline must see the original manga/comic
+        # panel, not the black-background stick-figure skeleton —
+        # otherwise OCR runs on the skeleton and extracts nothing.
+        _original_first_input = input_images[0] if input_images else None
 
         # Preservation: extract pose + facial landmarks from preservation_input
         # and prepend the skeleton to input_images so FLUX.2-klein conditions
@@ -462,12 +480,46 @@ class ImageGenerator:
             except Exception as _ups_exc:
                 print(f"  [upscale] post-process skipped: {_ups_exc}")
 
+        # Text preservation: runs LAST so the repainted text lands on
+        # the final (post-face-swap, post-upscale) image at full output
+        # resolution. If no explicit source was passed, fall back to
+        # the first input/reference image — for manga-to-realistic the
+        # img2img source IS the text source. Independent of
+        # ``skip_face_swap``: recursive callers (e.g. the Klein Hi-Res
+        # LoRA refine) don't set ``enable_text_preservation=True`` on
+        # the inner call so the feature naturally doesn't re-trigger.
+        text_status: Optional[str] = None
+        if enable_text_preservation:
+            try:
+                from src.image.text_preservation import preserve_text
+                tp_source = text_preservation_source
+                if tp_source is None:
+                    # Use the pre-preservation reference so OCR runs on
+                    # the original manga/comic panel, never on the pose
+                    # skeleton that the preservation step prepended.
+                    tp_source = _original_first_input
+                tp_langs = tuple(text_preservation_languages or ("en",))
+                image, text_status = preserve_text(
+                    tp_source,
+                    image,
+                    device=device,
+                    languages=tp_langs,
+                    min_confidence=float(text_preservation_min_confidence),
+                )
+                print(f"  [text-preservation] {text_status}")
+            except Exception as _text_exc:
+                # Best-effort — never fail the generation because OCR
+                # misbehaved.
+                print(f"  [text-preservation] skipped: {_text_exc}")
+
         fallback_info = f" | Note: {fallback_reason}" if fallback_reason else ""
         status = f"Seed: {seed} | Mode: {mode_str} | Model: {current_model} | Device: {device}{fallback_info}"
         if preservation_status:
             status += f" | {preservation_status}"
         if upscale_status:
             status += f" | {upscale_status}"
+        if text_status:
+            status += f" | {text_status}"
         return image, status
 
     def _scale_dims(self, w, h, factor):

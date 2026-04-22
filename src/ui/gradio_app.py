@@ -29,16 +29,41 @@ def on_builtin_lora_change(builtin_lora):
 def create_ui(context: Mapping[str, Any]):
     module_globals = globals()
     module_globals.update(context)
+    # Soft theme with tuned spacing/radius — calmer than the stock
+    # Gradio default, and the generated-image panel gets enough
+    # breathing room to stay the visual focus of the Generate tab.
+    theme = gr.themes.Soft(
+        primary_hue="blue",
+        secondary_hue="slate",
+        neutral_hue="slate",
+        spacing_size="md",
+        radius_size="md",
+    )
+    # Fixed-height output image (stops the right column from collapsing
+    # to 50 px before the first generation completes) + slightly more
+    # prominent primary button.  Pure CSS so it degrades cleanly on
+    # older Gradio versions.
+    custom_css = """
+    #ufig-output-image img { max-height: 720px; object-fit: contain; }
+    #ufig-output-image { min-height: 360px; }
+    button.primary { font-weight: 600; }
+    .ufig-post-processing-heading { margin-top: 0.5rem; opacity: 0.8; }
+    """
     with gr.Blocks(
         title="Ultra Fast Image Gen",
+        theme=theme,
+        css=custom_css,
         delete_cache=(GRADIO_CACHE_CLEANUP_FREQUENCY_SECONDS, GRADIO_CACHE_TTL_SECONDS),
     ) as demo:
         gr.Markdown(
             """
             # Ultra Fast Image Gen
 
-            Fast AI image generation and editing. Advanced controls are in the
-            **Advanced** tab; model selection and LoRA in **Models & LoRA**.
+            Fast AI image generation and editing for RTX 3070 / 8 GB VRAM.
+            Pick a model and preset in **Generate**, adjust optimisations in
+            **Advanced**, and manage LoRAs in **Models & LoRA**. Post-processing
+            (preservation, upscale, face swap, text preservation) lives next to
+            the generated image and runs in pipeline order once per click.
             """
         )
 
@@ -200,11 +225,19 @@ def create_ui(context: Mapping[str, Any]):
                                 label="Generated Image",
                                 type="pil",
                                 format="png",
+                                elem_id="ufig-output-image",
+                                show_download_button=True,
+                                show_share_button=False,
                                 buttons=["download", "fullscreen"],
                             )
                         )
                         send_to_upscaler_btn = gr.Button(
                             "Send to Upscaler", size="sm", variant="secondary"
+                        )
+
+                        gr.Markdown(
+                            "#### Post-processing",
+                            elem_classes=["ufig-post-processing-heading"],
                         )
 
                         with gr.Accordion(
@@ -300,6 +333,78 @@ def create_ui(context: Mapping[str, Any]):
                                 label="Tile Size (px)",
                                 info="Lower = less VRAM, more tiles per pass.",
                             )
+
+                        with gr.Accordion(
+                            "Text Preservation (OCR source, repaint output)",
+                            open=False,
+                        ) as text_preservation_accordion:
+                            gr.Markdown(
+                                "Extracts text from the input image (manga "
+                                "speech bubbles, captions, signage, etc.) and "
+                                "repaints it onto the generated image at the "
+                                "same relative position. Diffusion models "
+                                "reliably garble or delete text, so this is "
+                                "the only way to keep manga / comic text "
+                                "readable after a realistic-style conversion. "
+                                "EasyOCR runs on CUDA (CUDA 13-compatible) "
+                                "and auto-downloads its weights on first use."
+                            )
+                            enable_text_preservation = gr.Checkbox(
+                                label="Enable Text Preservation",
+                                value=False,
+                                info=(
+                                    "When off, OCR never runs. Source defaults "
+                                    "to the Image-to-Image reference if no "
+                                    "explicit source is set."
+                                ),
+                            )
+                            text_preservation_source = gr.Image(
+                                label="Text Source (defaults to img2img input)",
+                                type="pil",
+                                sources=["upload", "clipboard"],
+                                height=200,
+                            )
+                            with gr.Row():
+                                text_preservation_languages = gr.Dropdown(
+                                    # EasyOCR language codes that are most
+                                    # relevant for manga / comic / screenshot
+                                    # workflows. The dropdown accepts multi-
+                                    # select so a Japanese manga with English
+                                    # publisher captions can use both.
+                                    choices=[
+                                        "en",
+                                        "ja",
+                                        "ch_sim",
+                                        "ch_tra",
+                                        "ko",
+                                        "fr",
+                                        "de",
+                                        "es",
+                                        "it",
+                                        "pt",
+                                        "ru",
+                                    ],
+                                    value=["en"],
+                                    multiselect=True,
+                                    label="OCR Languages",
+                                    info=(
+                                        "EasyOCR language codes. Add 'ja' "
+                                        "for Japanese manga, 'ch_sim' for "
+                                        "simplified Chinese, etc."
+                                    ),
+                                )
+                                text_preservation_min_confidence = gr.Slider(
+                                    minimum=0.0,
+                                    maximum=1.0,
+                                    value=0.3,
+                                    step=0.05,
+                                    label="Min OCR Confidence",
+                                    info=(
+                                        "Drop OCR hits below this score. "
+                                        "0.3 keeps most text; raise to 0.5+ "
+                                        "to filter noise on low-quality scans."
+                                    ),
+                                )
 
                         with gr.Accordion(
                             "Face Swap (post-processing)", open=False
@@ -454,16 +559,27 @@ def create_ui(context: Mapping[str, Any]):
                     )
 
                 gr.Markdown("### LoRA")
+                # LoRA controls start visible; ``update_ui_for_model``
+                # keeps them that way for every shipped model (show_lora
+                # = True) so hiding by default only caused a frame of
+                # empty section before the first model.change fired.
+                _initial_builtin_lora = (
+                    initial_state.get("builtin_lora")
+                    or "None (Custom File Upload)"
+                )
+                _show_custom_file = (
+                    _initial_builtin_lora == "None (Custom File Upload)"
+                )
                 lora_label = gr.Markdown(
                     "Select a built-in LoRA, or upload a custom .safetensors file.",
-                    visible=False,
+                    visible=True,
                 )
                 builtin_lora = gr.Dropdown(
                     choices=[choice[0] for choice in BUILTIN_LORA_CHOICES],
-                    value=initial_state.get("builtin_lora", "None (Custom File Upload)"),
+                    value=_initial_builtin_lora,
                     label="Built-in LoRA",
                     info="Choose 'None' to upload your own.",
-                    visible=False,
+                    visible=True,
                 )
                 with gr.Row():
                     lora_file = gr.File(
@@ -472,10 +588,11 @@ def create_ui(context: Mapping[str, Any]):
                         file_count="single",
                         type="filepath",
                         value=initial_state["lora_file"],
-                        visible=False,
+                        visible=_show_custom_file,
                     )
                     clear_lora_btn = gr.Button(
-                        "Clear LoRA", scale=0, min_width=100, visible=False
+                        "Clear LoRA", scale=0, min_width=100,
+                        visible=_show_custom_file,
                     )
                 lora_strength = gr.Slider(
                     0.0,
@@ -484,7 +601,7 @@ def create_ui(context: Mapping[str, Any]):
                     step=0.05,
                     label="LoRA Strength",
                     info="1.0 = full effect, 0.5 = half effect.",
-                    visible=False,
+                    visible=True,
                 )
                 use_preset_values = gr.Checkbox(
                     label="Apply Preset Settings",
@@ -672,10 +789,21 @@ def create_ui(context: Mapping[str, Any]):
                 )
 
                 with gr.Accordion("Image Settings", open=True):
-                    downscale_factor = gr.Textbox(
-                        label="Downscale Factor (e.g., 2x, 4x)",
-                        value=initial_state["downscale_factor"],
-                        info="Applies to image-to-image and batch. 1x = no downscale.",
+                    # ``parse_downscale_factor`` accepts both "2x" strings
+                    # and plain floats, so swap the Textbox for a Number
+                    # input with stepper arrows — nicer to drive from the
+                    # keyboard and removes the "did I type 2 or 2x?"
+                    # ambiguity.
+                    downscale_factor = gr.Number(
+                        label="Downscale Factor",
+                        value=parse_downscale_factor(
+                            initial_state["downscale_factor"]
+                        ),
+                        minimum=1.0,
+                        maximum=8.0,
+                        step=0.25,
+                        precision=2,
+                        info="1.0 = no downscale. Applies to image-to-image and batch.",
                     )
                     img2img_strength = gr.Slider(
                         0.0,
@@ -1076,6 +1204,11 @@ def create_ui(context: Mapping[str, Any]):
                 upscale_model_inline,
                 upscale_target_scale_inline,
                 upscale_tile_inline,
+                # Text preservation (OCR source, repaint on output)
+                enable_text_preservation,
+                text_preservation_source,
+                text_preservation_languages,
+                text_preservation_min_confidence,
             ],
             outputs=[output_image, seed_info],
             show_progress=True,

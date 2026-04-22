@@ -3,23 +3,29 @@ PuLID-FLUX Helper for Character Consistency
 Optimized for 8GB VRAM (RTX 3070)
 """
 
+import os
+import json
+import threading
+from pathlib import Path
+from typing import Optional, Union, List
+
+import numpy as np
+import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 from PIL import Image
-import os
-import json
-from pathlib import Path
-import timm
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
-from typing import Optional, Union, List
 
 from src.constants import LEGACY_CHARACTER_MANAGER_STATE_FILENAME
 
-# Global cache for PuLID models
+# Global cache for PuLID models, keyed by ``{device}_{enable_fp8}``.
+# A lock guards the get-or-create path so two concurrent Gradio handlers
+# (e.g. a generation request and a Character Manager refresh) don't both
+# instantiate PuLID and double-allocate ~1.5 GB of VRAM.
 _pulid_cache = {}
+_pulid_cache_lock = threading.Lock()
 
 def get_memory_usage():
     """Get current CUDA memory usage in GB."""
@@ -181,10 +187,19 @@ class PuLIDHelper:
         if torch.cuda.is_available(): torch.cuda.empty_cache()
 
 def get_pulid_helper(device="cuda", enable_fp8=True):
+    """Get or create PuLIDHelper singleton (thread-safe).
+
+    Holds ``_pulid_cache_lock`` across the check-then-act so two
+    concurrent Gradio handlers can't both observe the cache as empty
+    and double-instantiate PuLID (+~1.5 GB VRAM).
+    """
     key = f"{device}_{enable_fp8}"
-    if key not in _pulid_cache:
-        _pulid_cache[key] = PuLIDHelper(device, enable_fp8)
-    return _pulid_cache[key]
+    with _pulid_cache_lock:
+        helper = _pulid_cache.get(key)
+        if helper is None:
+            helper = PuLIDHelper(device, enable_fp8)
+            _pulid_cache[key] = helper
+        return helper
 
 class MultiCharacterManager:
     """Manages character detection, clustering and embedding storage."""
